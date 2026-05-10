@@ -142,7 +142,7 @@ async function tryInstallThroughRunningApp(petId: string): Promise<InstallPetRes
   } catch (error) {
     if (error instanceof OpenPetsClientError && appUnavailableErrorCodes.has(error.code)) return null;
     if (error instanceof OpenPetsClientError && appTooOldErrorCodes.has(error.code)) {
-      throw new Error("Your running OpenPets app is too old for CLI pet installs. Quit OpenPets and run this command again, or update/restart OpenPets first.");
+      throw new Error("Your running OpenPets app is too old for CLI pet installs. Quit OpenPets and retry, or update OpenPets.");
     }
     throw error;
   }
