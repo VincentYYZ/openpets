@@ -22,6 +22,7 @@ const fetchTimeoutMs = 30_000;
 const directInstallLockName = ".install-pet.lock";
 const directInstallLockStaleMs = 10 * 60 * 1000;
 const appUnavailableErrorCodes = new Set(["unavailable", "connect_timeout", "connection_closed"]);
+const appTooOldErrorCodes = new Set(["unknown_method", "invalid_version"]);
 
 const builtInPet = {
   id: "builtin",
@@ -140,6 +141,9 @@ async function tryInstallThroughRunningApp(petId: string): Promise<InstallPetRes
     return { petId: result.petId, displayName: result.displayName, via: "app" };
   } catch (error) {
     if (error instanceof OpenPetsClientError && appUnavailableErrorCodes.has(error.code)) return null;
+    if (error instanceof OpenPetsClientError && appTooOldErrorCodes.has(error.code)) {
+      throw new Error("Your running OpenPets app is too old for CLI pet installs. Quit OpenPets and run this command again, or update/restart OpenPets first.");
+    }
     throw error;
   }
 }
