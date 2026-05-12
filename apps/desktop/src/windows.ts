@@ -101,7 +101,7 @@ export function installInternalUiHandlers(): void {
 
   ipcMain.handle("openpets:get-catalog-page", async (event, pageIndex: unknown) => {
     assertAllowedSender(event, ["pet-manager"]);
-    if (!Number.isSafeInteger(pageIndex) || pageIndex < 0) throw new Error("Invalid catalog page index.");
+    if (typeof pageIndex !== "number" || !Number.isSafeInteger(pageIndex) || pageIndex < 0) throw new Error("Invalid catalog page index.");
     return getCatalogPageUiState(pageIndex);
   });
 

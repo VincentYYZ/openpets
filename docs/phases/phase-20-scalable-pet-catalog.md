@@ -39,14 +39,28 @@ With a 1,000+ pet catalog, this creates excessive network, decode, memory, and l
 - Existing desktop clients can continue using `catalog.v2.json`.
 - Codex/local pet behavior remains unchanged.
 
-## Proposed asset model
+## Implementation status
 
-For every public catalog pet under `web/public/pets/<slug>/`, generate and publish:
+Implemented.
+
+This phase now ships the scalable path end-to-end:
+
+- `web/` generates static `thumb.webp` files from each catalog pet spritesheet.
+- `web/` writes `catalog.v3.json` plus paginated `catalog.v3/page-XXX.json` files.
+- Desktop fetches/validates v3 first and falls back to v2/fixture when v3 is unavailable or invalid.
+- Desktop Pet Manager card thumbnails use v3 `thumbnail` URLs instead of full `spritesheet.webp` files.
+- Desktop keeps `All`, `Installed`, and `Codex`, and exposes `Western` / `Asian` only when v3 metadata is available.
+- Desktop install lookup can resolve v3 pets outside the initially loaded page.
+- Codex/local pet discovery, import, and preview behavior were intentionally left unchanged.
+
+## Implemented asset model
+
+For every public catalog pet under `web/public/pets/<slug>/`, the web pipeline now generates and publishes:
 
 ```text
 spritesheet.webp  # existing full runtime/install asset
 thumb.webp        # new tiny static thumbnail for gallery cards
-preview.webp      # optional small animated/detail preview, if cheap to generate
+preview.webp      # not generated in this implementation
 <petId>.zip       # existing install package, served from zip.openpets.dev
 ```
 
@@ -56,24 +70,41 @@ Recommended budgets:
 - `preview.webp`: optional short idle animation or selected-detail image, target < 50-100 KB.
 - `spritesheet.webp`: unchanged; used for installs/runtime, not bulk gallery cards.
 
-If `preview.webp` is not generated in the first implementation, desktop can use `thumbnail` in cards and reserve `spritesheet` only for selected detail/install paths.
+`preview.webp` was not implemented in this phase. Desktop uses `thumbnail` for v3 cards and keeps `spritesheet` for install/runtime metadata. Existing v2 clients still receive full spritesheet `preview` values through `catalog.v2.json`.
 
-## Proposed catalog model
+Implemented thumbnail generation details:
 
-Keep `public/pets/catalog.v2.json` unchanged for compatibility.
+- Helper: `web/scripts/catalog-v3.js`.
+- Dependency: `sharp` added to `web/package.json` and `web/bun.lock`.
+- Source: `spritesheet.webp`.
+- Crop: idle first frame from the universal 8-column by 9-row spritesheet grid.
+- Output: `thumb.webp`, resized to fit within 128×128 as WebP.
+- Stale detection: regenerate when `spritesheet.webp` is newer than `thumb.webp`.
+- Budget warning: logs when a generated thumbnail exceeds 32 KB.
 
-Add `public/pets/catalog.v3.json` as an index:
+## Implemented catalog model
+
+`public/pets/catalog.v2.json` is still generated for compatibility. It remains capped to the desktop v2 validator's 1,000-pet limit if the public catalog grows beyond that size.
+
+`public/pets/catalog.v3.json` is now generated as an index. Current generated output at implementation time:
+
+- total pets: `668`
+- page size: `100`
+- page files: `7`
+- category counts: `western: 340`, `asian: 328`
+
+Index shape:
 
 ```json
 {
   "version": 3,
-  "generatedAt": "2026-05-12T00:00:00.000Z",
-  "total": 2500,
+  "generatedAt": "2026-05-12T15:54:53.434Z",
+  "total": 668,
   "pageSize": 100,
   "filters": {
     "categories": [
-      { "id": "western", "label": "Western", "count": 1250 },
-      { "id": "asian", "label": "Asian", "count": 1250 }
+      { "id": "western", "label": "Western", "count": 340 },
+      { "id": "asian", "label": "Asian", "count": 328 }
     ]
   },
   "pages": [
@@ -83,7 +114,7 @@ Add `public/pets/catalog.v3.json` as an index:
 }
 ```
 
-Add paginated page files under `public/pets/catalog.v3/`:
+Paginated page files are generated under `public/pets/catalog.v3/`:
 
 ```json
 {
@@ -96,7 +127,6 @@ Add paginated page files under `public/pets/catalog.v3/`:
       "displayName": "Snoopy",
       "description": "A tiny black-and-white beagle with a red collar for calm coding sessions.",
       "thumbnail": "https://openpets.dev/pets/snoopy-23e05847/thumb.webp",
-      "preview": "https://openpets.dev/pets/snoopy-23e05847/preview.webp",
       "spritesheet": "https://openpets.dev/pets/snoopy-23e05847/spritesheet.webp",
       "zip": "https://zip.openpets.dev/pets/snoopy-23e05847/snoopy.zip",
       "category": "western",
@@ -109,8 +139,8 @@ Add paginated page files under `public/pets/catalog.v3/`:
 Fields:
 
 - `thumbnail`: required for v3 catalog pets.
-- `preview`: optional; desktop must tolerate missing/failed preview.
-- `spritesheet`: optional for gallery use, but useful for detail/runtime preview if explicitly selected.
+- `preview`: optional; not emitted by the current generator.
+- `spritesheet`: emitted for install/runtime metadata and selected-detail fallback, but not used for card thumbnails.
 - `zip`: required for installation.
 - `category`: required for v3 public catalog pets and currently limited to `western` or `asian`.
 - `subcategory`: optional; preserve existing web metadata where present.
@@ -126,6 +156,17 @@ V3 index invariants:
 - Pet IDs must be unique across all pages.
 - Page URLs must match `https://openpets.dev/pets/catalog.v3/page-<3 digit>.json`.
 - Deploy ordering must publish page files before publishing the index that references them.
+
+Implemented desktop validation additionally enforces:
+
+- index `version: 3`, valid `generatedAt`, bounded `total`, bounded `pageSize`, and max 100 page URLs;
+- `pages.length === Math.ceil(total / pageSize)`;
+- category filters include exactly non-duplicated `western` and `asian` entries;
+- category counts sum to `total`;
+- page URLs are exact `https://openpets.dev/pets/catalog.v3/page-XXX.json` URLs with no query/hash;
+- v3 pet image URLs are HTTPS `openpets.dev` `/pets/` WebP URLs;
+- zip URLs remain HTTPS `zip.openpets.dev` `/pets/` URLs;
+- duplicate pet IDs are rejected within each page and across loaded/cached pages.
 
 ## Public catalog filters
 
@@ -152,65 +193,77 @@ Category source rules:
 - Any pet still missing `western`/`asian` after preservation is excluded from v3 and logged, while v2 remains unchanged for compatibility.
 - Generation must not infer category from names, slugs, descriptions, upstream source, or folder paths.
 
-## Web implementation plan
+## Web implementation details
 
-Update all public catalog writers that currently emit `catalog.v2.json`:
+Updated all public catalog writers that currently emit `catalog.v2.json`:
 
 - `web/scripts/sync-pets.js`
 - `web/scripts/import-reviewed-pets.js`
 - `web/scripts/sync-local-pets.js`
 
-Tasks:
+Implemented tasks:
 
-1. Add shared helpers for catalog asset paths and v3 output shape.
-2. Generate `thumb.webp` for each public catalog pet if missing or stale.
-3. Optionally generate `preview.webp` after `thumb.webp` is stable.
-4. Continue writing `catalog.v2.json` as a backward-compatible subset if the public catalog grows beyond the existing v2 desktop validation limit.
-5. Write `catalog.v3.json` plus `catalog.v3/page-XXX.json` files.
-6. Keep zip URLs on `zip.openpets.dev` unchanged.
-7. Include the existing web category metadata in every v3 pet as `category: "western" | "asian"`.
-8. Add validation that every v3 page item has safe `id`, `thumbnail`, `zip`, and known `category` fields.
-9. Add category counts to the v3 index so desktop can show correct filters before every page is loaded.
+1. Added shared helper `web/scripts/catalog-v3.js` for thumbnail generation, v2 compatibility output, category preservation, v3 index/page generation, and v3 JSON size checks.
+2. Generated `thumb.webp` for each public catalog pet if missing or stale.
+3. Deferred `preview.webp`; current v3 output omits `preview`.
+4. Kept `catalog.v2.json` compatible and capped through `v2CatalogCompatible()`.
+5. Wrote `catalog.v3.json` plus `catalog.v3/page-XXX.json` files.
+6. Kept zip URLs on `zip.openpets.dev` unchanged.
+7. Preserved existing web category metadata as `category: "western" | "asian"`.
+8. Excluded/logged pets missing known categories from v3 instead of guessing.
+9. Added category counts to the v3 index so desktop can expose filters before every page is loaded.
 
-Thumbnail generation options:
+Thumbnail generation behavior:
 
-- Preferred: use `sharp` in the web workspace to crop/extract the universal spritesheet idle first frame from the 8-column by 9-row spritesheet and resize to a small static WebP.
-- Fallback: if sprite-frame extraction is unreliable for a pet, create a small resized/cropped static thumbnail from the top-left/idle frame area and log the fallback.
-- Stale detection should compare `thumb.webp` mtime to `spritesheet.webp`; regenerate when the spritesheet is newer.
-- Generation should fail or loudly warn if thumbnails exceed the agreed byte/dimension budget.
+- Uses `sharp` in the web workspace.
+- Extracts the top-left idle frame based on the universal 8×9 spritesheet grid.
+- Resizes to 128×128 with `fit: contain` and writes WebP.
+- Compares `thumb.webp` mtime to `spritesheet.webp` mtime.
+- Warns if a generated thumbnail exceeds 32 KB.
 
-## Desktop implementation plan
+## Desktop implementation details
 
-Add a new desktop catalog path while keeping v2 fallback:
+Added a new desktop catalog path while keeping v2 fallback:
 
-1. Fetch `https://openpets.dev/pets/catalog.v3.json` first.
-2. Validate the index response size and exact final URL.
-3. Fetch the first page only on initial Pet Manager open.
-4. Load additional pages on scroll, explicit "Load more", or search pagination.
-5. Render card images from `thumbnail`, not `preview`/`spritesheet`.
-6. Preserve the existing `Codex` filter and add category filters: `All`, `Installed`, `Codex`, `Western`, and `Asian`.
-7. Apply `Western`/`Asian` filters using validated v3 `category` metadata only.
-8. Use `preview` only for selected-pet detail if available and cheap.
-9. Use `spritesheet` only for selected-pet detail preview if explicitly needed; never for every card.
-10. Fall back to v2 when v3 is unavailable.
-11. Keep all remote image URLs main-process validated before exposing them to preload.
+1. `apps/desktop/src/catalog.ts` fetches `https://openpets.dev/pets/catalog.v3.json` first.
+2. `apps/desktop/src/catalog-validation.ts` validates index/page shape and URL contracts.
+3. Initial Pet Manager state fetches only page 0.
+4. Additional pages load through `openpets:get-catalog-page` and a Pet Manager `Load more pets` button.
+5. Cards render from v3 `thumbnail`; v2 fallback still uses v2 `preview`.
+6. Existing `Codex` filter is preserved; v3 enables `Western` and `Asian` filter buttons.
+7. `Western`/`Asian` filtering uses only validated v3 `category` metadata.
+8. `spritesheet` is not used for bulk card thumbnails.
+9. If v3 fails, desktop falls back to v2, then fixture.
+10. If a later v3 page fails during install lookup, install lookup falls back to v2/fixture instead of aborting immediately.
+11. Remote image and catalog URLs are validated in the main process before preload consumes them.
 
 Main-process data contract:
 
-- Add a paged v3 catalog UI state instead of requiring preload to know remote page URLs.
+- `CatalogUiState` now includes `version: 2 | 3` and optional `v3` paging/filter metadata.
 - Main process owns index/page fetch, validation, caching, and install lookup.
-- `installPet(id)` must be able to resolve validated v3 metadata for pets outside page 0 by using a main-process cache or by fetching the needed validated page/index data.
-- Installed catalog pets that are not in the first loaded page must still retain usable installed-state rows; detail/category/thumbnail can be enriched as pages load.
+- `getCatalogPageUiState(pageIndex)` returns the currently loaded/cached v3 pages as a merged UI state.
+- `getCatalogPetById(petId)` can scan/fetch validated v3 pages for install lookup, then falls back to v2/fixture.
+- Installed v3 pets store `catalogVersion: 3` and thumbnail fallback in `InstalledPetState.source.preview`.
+- Installed catalog pets outside loaded pages reuse `installed.source.preview` so their cards do not go blank after restart.
 
 Renderer behavior:
 
-- Do not render 1,000 cards at once; use paging or virtualization.
-- Start with explicit paging/"Load more"; virtualization can be added later if needed.
-- Limit concurrent remote image loads.
-- Use async decoding and no referrer.
-- Keep graceful empty/failure surfaces for thumbnail load errors.
-- If only a thumbnail is available for a catalog pet, do not show fake animated mini state previews. Either fetch a selected-detail preview/spritesheet on selection or hide/degrade mini state previews for that pet.
-- Do not change Codex/local pet rendering or import behavior in this phase.
+- Uses explicit paging via `Load more pets`; virtualization is deferred.
+- Shows loaded-page UX copy: “Showing loaded pets only. Load more to continue browsing and filtering the full catalog.”
+- Uses `new Image()` with async decoding and `no-referrer`, preserving existing graceful empty/failure surfaces.
+- Treats v3 thumbnails as non-spritesheet images so installed v3 thumbnail fallbacks are not animated/cropped like spritesheets.
+- Does not change Codex/local pet rendering or import behavior.
+
+Updated desktop files:
+
+- `apps/desktop/src/catalog-validation.ts`: v3 index/page/pet/category validators.
+- `apps/desktop/src/catalog.ts`: v3 fetch/cache/page/lookup flow with v2 fallback.
+- `apps/desktop/src/windows.ts`: IPC `openpets:get-catalog-page`, category filter buttons, load-more styling.
+- `apps/desktop/preload.cjs`: v3 UI state, category filters, load-more behavior, thumbnail-first preview selection.
+- `apps/desktop/src/pet-installation.ts`: install lookup uses `getCatalogPetById()` and stores catalog version/preview fallback.
+- `apps/desktop/src/app-state.ts`: installed catalog source accepts `catalogVersion: 2 | 3`.
+- `apps/desktop/src/check-catalog-fixture.ts`: v3 validation coverage.
+- `apps/desktop/src/check-packaging-contract.ts`: Pet Manager v3/filter/thumbnail contract checks.
 
 ## Security and compatibility notes
 
@@ -240,6 +293,23 @@ Renderer behavior:
 4. Cleanup/observability:
    - Add size checks to web sync scripts.
    - Add desktop contract tests for v3 validation and fallback.
+
+## Generated deployment artifacts
+
+Generated in `web/public/pets/`:
+
+- `catalog.v3.json`
+- `catalog.v3/page-000.json` through `catalog.v3/page-006.json`
+- `thumb.webp` for each generated public pet directory
+
+Current generated v3 catalog validation:
+
+- `total`: 668
+- pages: 7
+- `western`: 340
+- `asian`: 328
+- every v3 pet thumbnail ends in `/thumb.webp`
+- every v3 pet category is either `western` or `asian`
 
 ## Acceptance criteria
 
@@ -278,6 +348,37 @@ pnpm --filter @open-pets/desktop test
 pnpm package:desktop:dir
 ```
 
+Actual validation completed:
+
+```bash
+cd web
+bun lint
+node --check scripts/catalog-v3.js
+node --check scripts/sync-pets.js
+node --check scripts/import-reviewed-pets.js
+node --check scripts/sync-local-pets.js
+node -e "/* generated catalog.v3 validator */"
+```
+
+```bash
+cd /home/alvin/pets
+pnpm -r build
+pnpm --filter @open-pets/desktop test
+```
+
+Results:
+
+- Web lint passed.
+- Web sync script syntax checks passed.
+- Generated v3 catalog validation passed.
+- Workspace build passed.
+- Desktop test suite passed, including catalog fixture validation and packaging contract validation.
+
+Notes:
+
+- `bun run build` for `web/` timed out in this environment after Nuxt generated output and reported existing link-checker `/integrations` 500 errors; this was not caused by the catalog v3 implementation.
+- `pnpm` was enabled through Corepack and resolved as `11.0.8` before running workspace build/test.
+
 Manual verification:
 
 1. Publish or locally serve a v3 catalog with at least 1,000 pets.
@@ -290,7 +391,31 @@ Manual verification:
 8. Disable v3 and confirm v2 fallback works with category filters hidden/disabled.
 9. Confirm Codex/local pets behave exactly as before.
 
-## Open questions
+## Oracle implementation review
+
+Oracle reviewed the plan and implementation in two passes.
+
+Plan review blockers fixed:
+
+- Preserved the existing `Codex` filter.
+- Defined category source rules instead of guessing categories.
+- Added paged v3 install lookup through main-process catalog fetching/cache.
+- Kept v2 compatibility bounded.
+- Added category counts to the v3 index for correct filter labels before all pages are loaded.
+
+Implementation review issues fixed:
+
+- Added `web/scripts/catalog-v3.js`, generated v3 JSON files, and generated `thumb.webp` assets.
+- Updated `web/bun.lock` for the new `sharp` dependency.
+- Installed v3 pets outside loaded pages now reuse stored thumbnail fallback after restart.
+- Desktop v3 validation now checks page count, category counts, category filter completeness, no page URL query/hash, and duplicate IDs across cached pages.
+- Install lookup falls back to v2/fixture if a later v3 page is unavailable/invalid.
+- Pet Manager now explicitly says filters/search apply to loaded pets until more pages are loaded.
+- v3 installed thumbnail fallbacks are treated as thumbnails, not spritesheets.
+
+Final Oracle result: no blockers and no remaining code should-fix defects.
+
+## Remaining open questions
 
 - Should `preview.webp` ship in the first implementation, or should v3 start with only `thumbnail` plus existing `spritesheet`?
 - Should desktop search initially search loaded pages only with explicit copy, or should the web publish a lightweight searchable index in the same phase?

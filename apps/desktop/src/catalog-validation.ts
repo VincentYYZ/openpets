@@ -68,14 +68,16 @@ export function validateCatalogV3Index(value: unknown): CatalogV3Index {
   if (!isRecord(value)) throw new Error("Catalog v3 index must be an object.");
   if (value.version !== 3) throw new Error("Catalog index version must be 3.");
   if (typeof value.generatedAt !== "string" || Number.isNaN(Date.parse(value.generatedAt))) throw new Error("Catalog generatedAt must be a valid date string.");
-  if (!Number.isSafeInteger(value.total) || value.total < 0 || value.total > 20_000) throw new Error("Catalog total is invalid.");
-  if (!Number.isSafeInteger(value.pageSize) || value.pageSize <= 0 || value.pageSize > 200) throw new Error("Catalog pageSize is invalid.");
+  const total = value.total;
+  const pageSize = value.pageSize;
+  if (!Number.isSafeInteger(total) || typeof total !== "number" || total < 0 || total > 20_000) throw new Error("Catalog total is invalid.");
+  if (!Number.isSafeInteger(pageSize) || typeof pageSize !== "number" || pageSize <= 0 || pageSize > 200) throw new Error("Catalog pageSize is invalid.");
   if (!Array.isArray(value.pages) || value.pages.length > 100) throw new Error("Catalog pages are invalid.");
   const pages = value.pages.map((page, index) => validateCatalogPageUrl(page, index));
   const filters = validateCatalogV3Filters(value.filters);
-  if (pages.length !== Math.ceil(value.total / value.pageSize)) throw new Error("Catalog page count does not match total/pageSize.");
-  if (filters.categories.reduce((total, category) => total + category.count, 0) !== value.total) throw new Error("Catalog category counts do not match total.");
-  return { version: 3, generatedAt: value.generatedAt, total: value.total, pageSize: value.pageSize, filters, pages };
+  if (pages.length !== Math.ceil(total / pageSize)) throw new Error("Catalog page count does not match total/pageSize.");
+  if (filters.categories.reduce((sum, category) => sum + category.count, 0) !== total) throw new Error("Catalog category counts do not match total.");
+  return { version: 3, generatedAt: value.generatedAt, total, pageSize, filters, pages };
 }
 
 export function validateCatalogV3Page(value: unknown, expectedPage: number, expectedPageSize: number): CatalogV3Page {
@@ -174,8 +176,9 @@ function validateCatalogV3Category(value: unknown): CatalogV3Category {
   if (!isRecord(value)) throw new Error("Catalog v3 category must be an object.");
   const id = validateCategory(value.id);
   if (typeof value.label !== "string" || value.label.length > 40) throw new Error("Catalog v3 category label is invalid.");
-  if (!Number.isSafeInteger(value.count) || value.count < 0) throw new Error("Catalog v3 category count is invalid.");
-  return { id, label: value.label, count: value.count };
+  const count = value.count;
+  if (!Number.isSafeInteger(count) || typeof count !== "number" || count < 0) throw new Error("Catalog v3 category count is invalid.");
+  return { id, label: value.label, count };
 }
 
 function validateCatalogPageUrl(value: unknown, index: number): string {
