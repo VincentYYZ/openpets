@@ -23,6 +23,8 @@ export interface CatalogUiState {
   readonly page?: number;
   readonly pageCount?: number;
   readonly supportsCategories?: boolean;
+  readonly originalsCount?: number;
+  readonly featuredCount?: number;
 }
 
 export interface CatalogSearchUiState {
@@ -53,6 +55,8 @@ export async function getCatalogUiState(): Promise<CatalogUiState> {
       page: 0,
       pageCount: remoteV3.index.pages.length,
       supportsCategories: true,
+      originalsCount: remoteV3.index.filters.originalsCount,
+      featuredCount: remoteV3.index.filters.featuredCount,
     };
   }
 
@@ -77,6 +81,8 @@ export async function getCatalogPageUiState(page: number): Promise<CatalogUiStat
     page,
     pageCount: remoteV3.index.pages.length,
     supportsCategories: true,
+    originalsCount: remoteV3.index.filters.originalsCount,
+    featuredCount: remoteV3.index.filters.featuredCount,
   };
 }
 
@@ -195,7 +201,7 @@ async function getRemoteCatalogV3Search(index: CatalogV3Index): Promise<readonly
   return await v3SearchPromise;
 }
 
-function toCatalogPetV2Compat(pet: { readonly id: string; readonly displayName: string; readonly description: string; readonly thumbnail: string; readonly spritesheet: string; readonly zip: string; readonly category: "western" | "asian"; readonly subcategory?: string }): CatalogPetV2 {
+function toCatalogPetV2Compat(pet: { readonly id: string; readonly displayName: string; readonly description: string; readonly thumbnail: string; readonly spritesheet: string; readonly zip: string; readonly category: "western" | "asian"; readonly subcategory?: string; readonly original?: boolean; readonly featured?: boolean }): CatalogPetV2 {
   const entry: CatalogPetV2 = {
     id: pet.id,
     displayName: pet.displayName,
@@ -205,8 +211,12 @@ function toCatalogPetV2Compat(pet: { readonly id: string; readonly displayName: 
     zip: pet.zip,
     category: pet.category,
   };
-  if (pet.subcategory) return { ...entry, subcategory: pet.subcategory };
-  return entry;
+  return {
+    ...entry,
+    ...(pet.subcategory ? { subcategory: pet.subcategory } : {}),
+    ...(pet.original === undefined ? {} : { original: pet.original }),
+    ...(pet.featured === undefined ? {} : { featured: pet.featured }),
+  };
 }
 
 async function tryLoadRemoteCatalog(): Promise<{ readonly ok: true; readonly catalog: CatalogV2 } | { readonly ok: false; readonly error: string }> {

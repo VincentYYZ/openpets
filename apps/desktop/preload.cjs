@@ -38,6 +38,8 @@ let activePetManagerSelection = "";
 let activePetManagerFilter = "all";
 let activePetManagerItems = [];
 let activePetManagerDefaultId = "";
+let petGalleryInstance = 0;
+const remoteCatalogFilters = new Set(["original", "western", "asian"]);
 
 contextBridge.exposeInMainWorld("openPets", api);
 contextBridge.exposeInMainWorld("openpetsAgentSetup", agentSetupApi);
@@ -649,6 +651,7 @@ async function renderPetManager(state) {
 }
 
 function renderPetGallery(catalogState, codexState, state, defaultPetId) {
+  const instance = ++petGalleryInstance;
   const status = requireElement("catalog-status");
   const search = requireInput("catalog-search");
   const grid = requireElement("catalog-pets");
@@ -671,8 +674,7 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
   const catalogPageCount = catalogState.pageCount || 1;
   let catalogSearchState = null;
   let remoteResultLimit = 100;
-  let activeRemoteResultIds = null;
-  let activeRemoteHasMore = false;
+  let renderGeneration = 0;
   let pets = createPetManagerItems({ ...catalogState, pets: catalogPets }, codexState, state, defaultPetId, defaultThumbnailSrc);
   activePetManagerItems = pets;
   activePetManagerDefaultId = defaultPetId;
@@ -680,18 +682,33 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
     activePetManagerSelection = defaultPetId || pets[0]?.id || "";
   }
 
+  const resetPetGalleryViewport = () => {
+    grid.scrollTop = 0;
+    document.querySelector(".pm-gallery-pane")?.scrollTo?.({ top: 0, behavior: "instant" });
+  };
+
+  const isSupportedFilter = (filterName) => {
+    if ((filterName === "western" || filterName === "asian") && !catalogState.supportsCategories) return false;
+    if (filterName === "original" && typeof catalogState.originalsCount !== "number") return false;
+    return true;
+  };
+
   for (const filter of document.querySelectorAll("[data-pet-filter]")) {
-    if ((filter.dataset.petFilter === "western" || filter.dataset.petFilter === "asian") && !catalogState.supportsCategories) {
+    const filterName = filter.dataset.petFilter || "all";
+    if (!isSupportedFilter(filterName)) {
       filter.hidden = true;
-      if (activePetManagerFilter === filter.dataset.petFilter) activePetManagerFilter = "all";
+      if (activePetManagerFilter === filterName) activePetManagerFilter = "all";
     } else {
       filter.hidden = false;
     }
     filter.classList.toggle("active", filter.dataset.petFilter === activePetManagerFilter);
     filter.setAttribute("aria-pressed", filter.dataset.petFilter === activePetManagerFilter ? "true" : "false");
     filter.onclick = () => {
-      activePetManagerFilter = filter.dataset.petFilter || "all";
+      const nextFilter = filter.dataset.petFilter || "all";
+      if (nextFilter === activePetManagerFilter) return;
+      activePetManagerFilter = nextFilter;
       remoteResultLimit = 100;
+      resetPetGalleryViewport();
       void render();
     };
   }
@@ -717,46 +734,56 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
     return false;
   };
 
-  const shouldUseRemoteResults = (query) => catalogState.version === 3 && (Boolean(query) || activePetManagerFilter === "western" || activePetManagerFilter === "asian");
+  const shouldUseRemoteResults = (filterName, query) => catalogState.version === 3 && ((filterName === "all" && Boolean(query)) || remoteCatalogFilters.has(filterName));
 
-  const ensureRemoteResultsLoaded = async (query) => {
-    activeRemoteResultIds = null;
-    activeRemoteHasMore = false;
-    if (!shouldUseRemoteResults(query)) return;
+  const getRemoteResults = async (filterName, query) => {
+    if (!shouldUseRemoteResults(filterName, query)) return { ids: null, hasMore: false };
     catalogSearchState ||= await api.getCatalogSearch();
     if (!isCatalogSearchUiState(catalogSearchState) || catalogSearchState.source === "error") throw new Error(catalogSearchState?.error || "Catalog search unavailable.");
     const matches = catalogSearchState.pets.filter((pet) => {
-      if (activePetManagerFilter !== "all" && activePetManagerFilter !== "installed" && activePetManagerFilter !== "codex" && pet.category !== activePetManagerFilter) return false;
+      if (filterName === "western" || filterName === "asian") {
+        if (pet.category !== filterName) return false;
+      } else if (filterName === "original" && !pet.original) {
+        return false;
+      }
       return !query || pet.searchText.includes(query);
     });
     const visibleMatches = matches.slice(0, remoteResultLimit);
-    activeRemoteResultIds = new Set(visibleMatches.map((pet) => pet.id));
-    activeRemoteHasMore = matches.length > visibleMatches.length;
     const pages = new Set(visibleMatches.map((pet) => pet.catalogPage));
     await Promise.all([...pages].map((page) => loadCatalogPage(page)));
+    return { ids: new Set(visibleMatches.map((pet) => pet.id)), hasMore: matches.length > visibleMatches.length };
   };
 
   const render = async () => {
+    const generation = ++renderGeneration;
+    const filterName = activePetManagerFilter;
+    const query = search.value.trim().toLowerCase();
+    const isStale = () => instance !== petGalleryInstance || generation !== renderGeneration || filterName !== activePetManagerFilter || query !== search.value.trim().toLowerCase();
     for (const filter of document.querySelectorAll("[data-pet-filter]")) {
-      filter.classList.toggle("active", filter.dataset.petFilter === activePetManagerFilter);
-      filter.setAttribute("aria-pressed", filter.dataset.petFilter === activePetManagerFilter ? "true" : "false");
+      filter.classList.toggle("active", filter.dataset.petFilter === filterName);
+      filter.setAttribute("aria-pressed", filter.dataset.petFilter === filterName ? "true" : "false");
     }
 
-    const query = search.value.trim().toLowerCase();
-    if (shouldUseRemoteResults(query)) {
-      try {
-        await ensureRemoteResultsLoaded(query);
-      } catch (error) {
-        renderCaughtError(error);
-      }
+    let remoteResults = { ids: null, hasMore: false };
+    let remoteError = null;
+    try {
+      remoteResults = await getRemoteResults(filterName, query);
+    } catch (error) {
+      remoteError = error;
     }
+    if (isStale()) {
+      return;
+    }
+    if (remoteError) renderCaughtError(remoteError);
+
     const visiblePets = pets.filter((pet) => {
-      if (activePetManagerFilter === "installed" && !pet.installed) return false;
-      if (activePetManagerFilter === "codex" && !pet.codexPet && !pet.codexImported) return false;
-      if ((activePetManagerFilter === "western" || activePetManagerFilter === "asian") && pet.category !== activePetManagerFilter) return false;
+      if (filterName === "installed" && !pet.installed) return false;
+      if (filterName === "codex" && !pet.codexPet && !pet.codexImported) return false;
+      if (filterName === "original" && !pet.original) return false;
+      if ((filterName === "western" || filterName === "asian") && pet.category !== filterName) return false;
       const haystack = `${pet.id} ${pet.displayName} ${pet.description}`.toLowerCase();
-      if (activeRemoteResultIds) {
-        const remoteMatch = Boolean(pet.catalogPet && activeRemoteResultIds.has(pet.id));
+      if (remoteResults.ids) {
+        const remoteMatch = Boolean(pet.catalogPet && remoteResults.ids.has(pet.id));
         return query ? remoteMatch || haystack.includes(query) : remoteMatch;
       }
       return haystack.includes(query);
@@ -771,12 +798,12 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
     if (visiblePets.length === 0) {
       const empty = document.createElement("div");
       empty.className = "pm-empty-state";
-      empty.textContent = activePetManagerFilter === "installed" ? "No installed pets match your search." : activePetManagerFilter === "codex" ? "No Codex pets match your search." : activePetManagerFilter === "western" || activePetManagerFilter === "asian" ? `No ${activePetManagerFilter} pets match your search.` : "No pets match your search.";
+      empty.textContent = createEmptyPetGalleryMessage(filterName);
       grid.append(empty);
     }
 
-    const hasMoreCatalogPages = catalogState.version === 3 && !query && !shouldUseRemoteResults(query) && loadedCatalogPages.size < catalogPageCount;
-    const hasMoreRemoteResults = activeRemoteHasMore;
+    const hasMoreCatalogPages = filterName === "all" && catalogState.version === 3 && !query && loadedCatalogPages.size < catalogPageCount;
+    const hasMoreRemoteResults = remoteResults.hasMore;
     if (hasMoreCatalogPages || hasMoreRemoteResults) {
       const loadMore = document.createElement("button");
       loadMore.className = "pm-load-more";
@@ -812,6 +839,7 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
 
   search.oninput = () => {
     remoteResultLimit = 100;
+    resetPetGalleryViewport();
     void render();
   };
   void render();
@@ -856,6 +884,8 @@ function createPetManagerItem(id, displayName, description, installed, catalogPe
     displayName,
     description,
     category: catalogPet?.category || "",
+    original: Boolean(catalogPet?.original),
+    featured: Boolean(catalogPet?.featured),
     installed,
     catalogPet,
     codexPet,
@@ -869,6 +899,15 @@ function createPetManagerItem(id, displayName, description, installed, catalogPe
     broken: Boolean(installed?.broken),
     brokenReason: installed?.brokenReason || "",
   };
+}
+
+function createEmptyPetGalleryMessage(filterName) {
+  if (filterName === "installed") return "No installed pets match your search.";
+  if (filterName === "codex") return "No Codex pets match your search.";
+  if (filterName === "original") return "No OpenPets originals match your search.";
+  if (filterName === "western") return "No Western pets match your search.";
+  if (filterName === "asian") return "No Asian pets match your search.";
+  return "No pets match your search.";
 }
 
 function createPetGalleryCard(pet, defaultPetId, onSelect) {

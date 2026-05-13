@@ -13,6 +13,8 @@ export interface CatalogPetV2 {
   readonly spritesheet?: string;
   readonly category?: "western" | "asian";
   readonly subcategory?: string;
+  readonly original?: boolean;
+  readonly featured?: boolean;
 }
 
 export interface CatalogV3Index {
@@ -23,6 +25,8 @@ export interface CatalogV3Index {
   readonly search: string;
   readonly filters: {
     readonly categories: readonly CatalogV3Category[];
+    readonly originalsCount?: number;
+    readonly featuredCount?: number;
   };
   readonly pages: readonly string[];
 }
@@ -61,6 +65,8 @@ export interface CatalogV3SearchPet {
   readonly searchText: string;
   readonly category: "western" | "asian";
   readonly catalogPage: number;
+  readonly original?: boolean;
+  readonly featured?: boolean;
 }
 
 export interface CatalogPetV3 {
@@ -72,6 +78,8 @@ export interface CatalogPetV3 {
   readonly zip: string;
   readonly category: "western" | "asian";
   readonly subcategory?: string;
+  readonly original?: boolean;
+  readonly featured?: boolean;
 }
 
 export function validateCatalogV2(value: unknown): CatalogV2 {
@@ -111,7 +119,11 @@ export function validateCatalogV3Index(value: unknown): CatalogV3Index {
     total,
     pageSize,
     search,
-    filters: { categories },
+    filters: {
+      categories,
+      ...(value.filters.originalsCount === undefined ? {} : { originalsCount: validateCount(value.filters.originalsCount) }),
+      ...(value.filters.featuredCount === undefined ? {} : { featuredCount: validateCount(value.filters.featuredCount) }),
+    },
     pages,
   };
 }
@@ -198,8 +210,8 @@ function validateCatalogV3Pet(value: unknown, ids: Set<string>): CatalogPetV3 {
     zip: validateCatalogUrl(value.zip, "zip"),
     category,
   };
-  if (value.subcategory !== undefined) return { ...entry, subcategory: validateString(value.subcategory, "subcategory", 80) };
-  return entry;
+  const withSubcategory = value.subcategory === undefined ? entry : { ...entry, subcategory: validateString(value.subcategory, "subcategory", 80) };
+  return withCatalogMeta(withSubcategory, value);
 }
 
 function validateCatalogV3Category(value: unknown): CatalogV3Category {
@@ -214,13 +226,26 @@ function validateCatalogV3Category(value: unknown): CatalogV3Category {
 function validateCatalogV3SearchPet(value: unknown, catalogPageCount: number): CatalogV3SearchPet {
   if (!isRecord(value)) throw new Error("Catalog v3 search pet must be an object.");
   const catalogPage = validateInteger(value.catalogPage, "Catalog v3 search catalogPage", 0, Math.max(0, catalogPageCount - 1));
-  return {
+  return withCatalogMeta({
     id: validateId(value.id),
     displayName: validateString(value.displayName, "displayName", 120),
     searchText: validateString(value.searchText, "searchText", 400),
     category: validateCategory(value.category),
     catalogPage,
+  }, value);
+}
+
+function withCatalogMeta<T extends object>(entry: T, value: Record<string, unknown>): T & { readonly original?: boolean; readonly featured?: boolean } {
+  return {
+    ...entry,
+    ...(value.original === undefined ? {} : { original: validateBoolean(value.original, "original") }),
+    ...(value.featured === undefined ? {} : { featured: validateBoolean(value.featured, "featured") }),
   };
+}
+
+function validateBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Catalog pet ${field} must be a boolean.`);
+  return value;
 }
 
 function validateCategory(value: unknown): "western" | "asian" {
