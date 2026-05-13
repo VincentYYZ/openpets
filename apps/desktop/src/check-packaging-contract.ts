@@ -132,8 +132,8 @@ assert.match(windowsSource, /pm-sprite-state-happy\.pm-animate-sprite \{ animati
 assert.match(windowsSource, /@keyframes pm-sprite-thinking/, "Pet Manager must define thinking row animation keyframes.");
 assert.match(windowsSource, /@keyframes pm-sprite-wave/, "Pet Manager must define wave row animation keyframes.");
 assert.match(windowsSource, /@keyframes pm-sprite-happy/, "Pet Manager must define happy row animation keyframes.");
-assert.match(petWindowSource, /max-width:\s*min\(204px/, "very long message bubbles must stay capped within the tight pet window.");
-assert.match(petWindowSource, /-webkit-line-clamp:\s*9/, "very long message bubbles must allow enough visible lines.");
+assert.match(petWindowSource, /max-width:\s*min\(220px/, "very long message bubbles must stay capped within the tight pet window.");
+assert.match(petWindowSource, /-webkit-line-clamp:\s*8/, "very long message bubbles must allow enough visible lines.");
 assert.match(petWindowSource, /createSpriteStateCss\("\.sprite"\)/, "built-in sprite CSS must react to reaction state.");
 assert.match(petWindowSource, /createSpriteStateCss\("\.installed-sprite"\)/, "installed sprite CSS must react to reaction state.");
 assert.match(petWindowSource, /html\[data-motion-state=\"\$\{motion\}\"\] \$\{selector\}/, "sprite CSS must let drag motion override reaction state.");

@@ -3,13 +3,16 @@ import { BrowserWindow, screen } from "electron";
 import { getAppStateSnapshot, getDefaultPetPosition, resetDefaultPetPosition, setDefaultPetPosition, updatePreferences } from "./app-state.js";
 import { defaultPetWindowSize, getDefaultPetInitialPosition } from "./display.js";
 import { transientDisplayMs, type OpenPetsReaction } from "./local-ipc-protocol.js";
-import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetReactionState, type PetTransientDisplay } from "./pet-window.js";
+import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetReactionState, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
 
 let defaultPetWindow: BrowserWindow | null = null;
 let paused = false;
 let transientDisplay: PetTransientDisplay | null = null;
+let statusBadge: PetStatusBadgeReaction | null = null;
 let transientDisplayTimeout: NodeJS.Timeout | null = null;
 let transientAnimationTimeout: NodeJS.Timeout | null = null;
+let statusBadgeTimeout: NodeJS.Timeout | null = null;
+const busyStatusBadgeMs = 120_000;
 
 export function showDefaultPet(): void {
   updatePreferences({ openDefaultPetOnLaunch: true });
@@ -44,7 +47,7 @@ export function setDefaultPetPaused(nextPaused: boolean): void {
     return;
   }
 
-  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay);
+  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge);
 }
 
 export function getDefaultPetPaused(): boolean {
@@ -56,7 +59,7 @@ export function refreshDefaultPetContent(): void {
     return;
   }
 
-  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay);
+  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge);
 }
 
 export function applyExternalPetReaction(reaction: OpenPetsReaction): { readonly shown: boolean; readonly reason?: string } {
@@ -74,6 +77,7 @@ export function applyExternalPetSay(message: string, reaction?: OpenPetsReaction
     return { shown: false, reason: "paused" };
   }
 
+  if (!reaction) clearStatusBadge();
   setTransientDisplay({ message, reaction });
   showDefaultPetForExternalEvent();
   return { shown: isDefaultPetVisible() };
@@ -108,6 +112,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     position,
     paused,
     display: transientDisplay,
+    badge: statusBadge,
     onPositionChanged: setDefaultPetPosition,
     onHideRequested: hideDefaultPet,
   });
@@ -121,6 +126,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
 
 function setTransientDisplay(display: PetTransientDisplay): void {
   transientDisplay = mergePetTransientDisplay(transientDisplay, display);
+  if (display.reaction) setStatusBadge(display.reaction);
 
   if (transientDisplayTimeout) {
     clearTimeout(transientDisplayTimeout);
@@ -158,6 +164,30 @@ function showDefaultPetForExternalEvent(): void {
   if (isDefaultPetVisible() || state.preferences.openDefaultPetOnLaunch) {
     showDefaultPet();
   }
+}
+
+function setStatusBadge(reaction: OpenPetsReaction): void {
+  if (reaction === "idle") {
+    clearStatusBadge();
+    return;
+  }
+
+  statusBadge = reaction;
+  if (statusBadgeTimeout) clearTimeout(statusBadgeTimeout);
+  statusBadgeTimeout = setTimeout(() => {
+    clearStatusBadge();
+    refreshDefaultPetContent();
+  }, isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs);
+}
+
+function clearStatusBadge(): void {
+  statusBadge = null;
+  if (statusBadgeTimeout) clearTimeout(statusBadgeTimeout);
+  statusBadgeTimeout = null;
+}
+
+function isBusyStatusBadgeReaction(reaction: OpenPetsReaction): boolean {
+  return reaction === "thinking" || reaction === "working" || reaction === "editing" || reaction === "running" || reaction === "testing" || reaction === "waiting";
 }
 
 function reclampDefaultPetWindow(): void {
