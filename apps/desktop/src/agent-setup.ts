@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 
 import { app } from "electron";
 import { buildClaudeMcpGetCommand, buildClaudeMcpPreview, classifyClaudeMcpStatus, createOpenPetsHookSettingsPreview, doctorClaudeHooks, installClaudeHooks, mapAsarPathToUnpacked, uninstallClaudeHooks, type ClaudeCommandSpec, type ClaudeHookDoctorResult, type ClaudeMcpPreview, type OpenPetsCommandMode, type ParsedClaudeMcpEntry } from "@open-pets/claude";
-import { classifyCursorMcpStatus, executeCursorMcpWrite, getCursorGlobalMcpPath, planCursorMcpInstall, planCursorMcpRemove, planCursorMcpReplace, readCursorMcpConfig, type CursorMcpStatusResult } from "@open-pets/cursor";
+import { buildCursorRulesPreview, classifyCursorMcpStatus, executeCursorMcpWrite, getCursorGlobalMcpPath, planCursorMcpInstall, planCursorMcpRemove, planCursorMcpReplace, readCursorMcpConfig, type CursorMcpStatusResult } from "@open-pets/cursor";
 import { buildOpenPetsOnlyPreview, type RedactedPreview } from "@open-pets/cursor";
 import { doctorOpenCodeGlobalSetup, getGlobalOpenCodeConfigDir, parseOpenCodeConfig, prepareOpenCodeGlobalRemove, prepareOpenCodeGlobalSetup, writePreparedOpenCodeGlobalRemove, writePreparedOpenCodeGlobalSetup } from "@open-pets/opencode";
 
@@ -92,6 +92,8 @@ export interface CursorSetupPreview {
   readonly global: true;
   readonly configPath: string;
   readonly mcpEntry: RedactedPreview;
+  readonly rulesPath: string;
+  readonly rulesContent: string;
   readonly commandMode: "published" | "local" | "bundled";
 }
 
@@ -392,6 +394,8 @@ async function getCursorSetup(commandMode: OpenPetsCommandMode, selectedPetId: s
       global: true,
       configPath: formatUserPath(configPath) ?? configPath,
       mcpEntry: buildOpenPetsOnlyPreview({ mcpVersion, petId, commandMode: "published" }),
+      rulesPath: ".cursor/rules/openpets.mdc",
+      rulesContent: buildCursorRulesPreview(),
       commandMode: "published",
     },
   };

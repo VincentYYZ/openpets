@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,11 @@ assert.equal(parseConfigureArgs(["--pet=fixer"]).petId, "fixer");
 assert.equal(parseConfigureArgs(["--agent", "opencode", "--pet", "fixer"]).agent, "opencode");
 assert.equal(parseConfigureArgs(["--agent", "cursor", "--pet", "fixer"]).agent, "cursor");
 assert.equal(parseConfigureArgs(["--agent", "cursor", "--pet", "fixer"]).cwd, process.cwd());
+assert.equal(parseConfigureArgs(["--agent", "cursor", "--rules-only"]).cursorRulesMode, "only");
+assert.equal(parseConfigureArgs(["--agent", "cursor", "--remove-rules"]).cursorRulesMode, "remove");
+assert.equal(parseConfigureArgs(["--agent", "cursor", "--with-rules"]).cursorRulesMode, "with");
+assert.throws(() => parseConfigureArgs(["--agent", "cursor", "--with-rules", "--rules-only"]));
+assert.throws(() => parseConfigureArgs(["--agent", "claude", "--rules-only"]));
 assert.throws(() => parseConfigureArgs(["--pet", "bad/pet"]));
 assert.deepEqual(parseInstallArgs(["review-owl"]), { petId: "review-owl" });
 assert.throws(() => parseInstallArgs([]));
@@ -221,6 +226,43 @@ try {
   const cursorReplaced = JSON.parse(readFileSync(join(cursorConflictProject, ".cursor", "mcp.json"), "utf8")) as { readonly mcpServers?: Record<string, { readonly command?: string; readonly args?: readonly string[] }> };
   assert.equal(cursorReplaced.mcpServers?.other?.command, "other");
   assert.deepEqual(cursorReplaced.mcpServers?.openpets?.args, ["-y", `@open-pets/mcp@${packageVersion}`, "--pet", "fixer"]);
+
+  const cursorRulesOnlyProject = join(dir, "cursor-rules-only");
+  mkdirSync(cursorRulesOnlyProject);
+  await configureProject({ agent: "cursor", cwd: cursorRulesOnlyProject, yes: true, force: false, localDev: false, cursorRulesMode: "only" });
+  const cursorRulesPath = join(cursorRulesOnlyProject, ".cursor", "rules", "openpets.mdc");
+  const cursorRulesContent = readFileSync(cursorRulesPath, "utf8");
+  assert.match(cursorRulesContent, /OPENPETS:CURSOR_RULES:START/);
+  assert.match(cursorRulesContent, /openpets_say/);
+  assert.doesNotMatch(cursorRulesContent, /alwaysApply:\s*true/);
+  assert.equal(existsSync(join(cursorRulesOnlyProject, ".cursor", "mcp.json")), false);
+
+  await configureProject({ agent: "cursor", cwd: cursorRulesOnlyProject, yes: true, force: false, localDev: false, cursorRulesMode: "remove" });
+  assert.equal(existsSync(cursorRulesPath), false);
+  assert.equal(existsSync(join(cursorRulesOnlyProject, ".cursor", "rules")), true);
+
+  const cursorWithRulesConflictProject = join(dir, "cursor-with-rules-conflict");
+  mkdirSync(join(cursorWithRulesConflictProject, ".cursor", "rules"), { recursive: true });
+  writeFileSync(join(cursorWithRulesConflictProject, ".cursor", "rules", "openpets.mdc"), "User rule SECRET=hidden\n", "utf8");
+  await assert.rejects(() => configureProject({ agent: "cursor", petId: "fixer", cwd: cursorWithRulesConflictProject, yes: true, force: false, localDev: false, cursorRulesMode: "with" }));
+  assert.equal(existsSync(join(cursorWithRulesConflictProject, ".cursor", "mcp.json")), false);
+  assert.equal(readFileSync(join(cursorWithRulesConflictProject, ".cursor", "rules", "openpets.mdc"), "utf8"), "User rule SECRET=hidden\n");
+
+  let cursorWithRulesOutput = "";
+  process.stdout.write = ((chunk: string | Uint8Array): boolean => { cursorWithRulesOutput += String(chunk); return true; }) as typeof process.stdout.write;
+  try {
+    await configureProject({ agent: "cursor", petId: "fixer", cwd: cursorWithRulesConflictProject, yes: true, force: true, localDev: false, cursorRulesMode: "with" });
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+  assert.match(cursorWithRulesOutput, /Rules backup:/);
+  assert.equal(cursorWithRulesOutput.includes("hidden"), false);
+  const cursorWithRulesConfig = JSON.parse(readFileSync(join(cursorWithRulesConflictProject, ".cursor", "mcp.json"), "utf8")) as { readonly mcpServers?: Record<string, { readonly args?: readonly string[] }> };
+  assert.deepEqual(cursorWithRulesConfig.mcpServers?.openpets?.args, ["-y", `@open-pets/mcp@${packageVersion}`, "--pet", "fixer"]);
+  assert.match(readFileSync(join(cursorWithRulesConflictProject, ".cursor", "rules", "openpets.mdc"), "utf8"), /OPENPETS:CURSOR_RULES:START/);
+  const cursorRulesBackups = readdirSync(join(cursorWithRulesConflictProject, ".cursor", "rules")).filter((name) => name.includes("openpets-backup"));
+  assert.equal(cursorRulesBackups.length, 1);
+  assert.equal(readFileSync(join(cursorWithRulesConflictProject, ".cursor", "rules", cursorRulesBackups[0]!), "utf8"), "User rule SECRET=hidden\n");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

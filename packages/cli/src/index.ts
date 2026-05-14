@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { allowedReactions, createOpenPetsClient, OpenPetsClientError, type OpenPetsPetListItem, type OpenPetsReaction } from "@open-pets/client";
 import { claudeHookEvents, openPetsHookMarker, removeOpenPetsHooks, runClaudeHookFromStdin, validateOpenPetsPetArg } from "@open-pets/claude";
-import { buildOpenPetsOnlyPreview, classifyCursorMcpStatus, executeCursorMcpWrite, getCursorProjectMcpPath, planCursorMcpInstall, planCursorMcpReplace, readCursorMcpConfig } from "@open-pets/cursor";
+import { buildCursorRulesPreview, buildOpenPetsOnlyPreview, classifyCursorMcpStatus, classifyCursorRulesStatus, executeCursorMcpWrite, executeCursorRulesWrite, getCursorProjectMcpPath, getCursorProjectRulesPath, planCursorMcpInstall, planCursorMcpReplace, planCursorRulesInstall, planCursorRulesRemove, planCursorRulesReplace, readCursorMcpConfig, readCursorOpenPetsRules } from "@open-pets/cursor";
 import { prepareOpenCodeProjectSetup, writePreparedOpenCodeProjectSetup } from "@open-pets/opencode";
 
 export const cliPackageName = "@open-pets/cli";
@@ -21,6 +21,7 @@ interface ConfigureOptions {
   readonly yes: boolean;
   readonly force: boolean;
   readonly localDev: boolean;
+  readonly cursorRulesMode?: "with" | "only" | "remove";
 }
 
 interface InstallOptions {
@@ -185,17 +186,36 @@ export async function configureProject(options: ConfigureOptions): Promise<void>
 }
 
 async function configureCursorProject(options: ConfigureOptions, projectDir: string): Promise<void> {
+  const configPath = getCursorProjectMcpPath(projectDir);
+  const rulesPath = getCursorProjectRulesPath(projectDir);
+
+  if (options.cursorRulesMode === "only") {
+    configureCursorRulesOnly(projectDir, rulesPath, options.force);
+    return;
+  }
+
+  if (options.cursorRulesMode === "remove") {
+    removeCursorRulesOnly(projectDir, rulesPath);
+    return;
+  }
+
   const client = createOpenPetsClient();
   const selectedPet = await resolveConfiguredPet(client, options.petId);
   const packageVersion = getPackageVersion();
-  const configPath = getCursorProjectMcpPath(projectDir);
   const previewOptions = { mcpVersion: packageVersion, petId: selectedPet.id, commandMode: options.localDev ? "local" as const : "published" as const, mcpEntryPath: options.localDev ? require.resolve("@open-pets/mcp") : undefined };
   const readResult = readCursorMcpConfig(configPath);
   const status = classifyCursorMcpStatus(readResult, configPath, previewOptions);
   process.stdout.write(`Cursor config: ${configPath}\nStatus: ${status.status} - ${status.message}\nOpenPets MCP preview:\n${JSON.stringify(buildOpenPetsOnlyPreview(previewOptions), null, 2)}\n`);
 
-  if (status.status === "installed") {
-    process.stdout.write(`OpenPets is already configured for Cursor in ${projectDir}.\nRestart or reload Cursor in this project to load OpenPets.\n`);
+  const rulesRequested = options.cursorRulesMode === "with";
+  const rulesReadResult = rulesRequested ? readCursorOpenPetsRules(projectDir) : undefined;
+  const rulesStatus = rulesReadResult ? classifyCursorRulesStatus(rulesReadResult, rulesPath) : undefined;
+  if (rulesStatus) {
+    process.stdout.write(`Cursor rules: ${rulesPath}\nRules status: ${rulesStatus.status} - ${rulesStatus.message}\nOpenPets rules preview:\n${buildCursorRulesPreview()}\n`);
+  }
+
+  if (status.status === "installed" && (!rulesRequested || rulesStatus?.status === "installed")) {
+    process.stdout.write(`OpenPets is already configured for Cursor in ${projectDir}.\nRestart or reload Cursor or start a new chat in this project to load OpenPets.\n`);
     return;
   }
   if (status.status === "invalid" || status.status === "error") {
@@ -204,11 +224,55 @@ async function configureCursorProject(options: ConfigureOptions, projectDir: str
   if (status.status === "conflict" && !options.force) {
     throw new CliError(`Cursor already has a non-OpenPets openpets MCP entry. Rerun with --force to replace only mcpServers.openpets.`);
   }
+  if (rulesStatus && (rulesStatus.status === "invalid" || rulesStatus.status === "error")) {
+    throw new CliError(`${rulesStatus.message} Fix ${rulesPath}, then rerun setup.`);
+  }
+  if (rulesStatus?.status === "conflict" && !options.force) {
+    throw new CliError("Cursor already has .cursor/rules/openpets.mdc with user content. Rerun with --force to replace only that file.");
+  }
 
-  const plan = status.status === "conflict" ? planCursorMcpReplace(configPath, previewOptions) : planCursorMcpInstall(configPath, previewOptions, options.force);
+  const plan = status.status === "installed" ? undefined : status.status === "conflict" ? planCursorMcpReplace(configPath, previewOptions) : planCursorMcpInstall(configPath, previewOptions, options.force);
+  if (plan && "ok" in plan) throw new CliError(plan.message);
+  const rulesPlan = rulesRequested && rulesStatus?.status !== "installed" ? rulesStatus?.status === "conflict" ? planCursorRulesReplace(projectDir) : planCursorRulesInstall(projectDir, options.force) : undefined;
+  if (rulesPlan && "ok" in rulesPlan) throw new CliError(rulesPlan.message);
+
+  if (plan) executeCursorMcpWrite(plan);
+  if (rulesPlan) executeCursorRulesWrite(rulesPlan);
+
+  const backups = [plan?.backupPath ? `MCP backup: ${plan.backupPath}` : undefined, rulesPlan?.backupPath ? `Rules backup: ${rulesPlan.backupPath}` : undefined].filter(Boolean).join("\n");
+  process.stdout.write(`OpenPets configured for Cursor in ${projectDir}.\nPet: ${sanitizeTerminalText(selectedPet.displayName)} (${selectedPet.id})\n${backups ? `${backups}\n` : ""}Restart or reload Cursor or start a new chat in this project to load OpenPets.\nTo remove MCP, delete mcpServers.openpets from ${configPath}. To remove rules, run with --remove-rules.\n`);
+}
+
+function configureCursorRulesOnly(projectDir: string, rulesPath: string, force: boolean): void {
+  const readResult = readCursorOpenPetsRules(projectDir);
+  const status = classifyCursorRulesStatus(readResult, rulesPath);
+  process.stdout.write(`Cursor rules: ${rulesPath}\nRules status: ${status.status} - ${status.message}\nOpenPets rules preview:\n${buildCursorRulesPreview()}\n`);
+  if (status.status === "installed") {
+    process.stdout.write("OpenPets Cursor rules are already installed. Cursor may use changed rules in a new or refreshed chat.\n");
+    return;
+  }
+  if (status.status === "invalid" || status.status === "error") throw new CliError(`${status.message} Fix ${rulesPath}, then rerun setup.`);
+  if (status.status === "conflict" && !force) throw new CliError("Cursor already has .cursor/rules/openpets.mdc with user content. Rerun with --force to replace only that file.");
+  const plan = status.status === "conflict" ? planCursorRulesReplace(projectDir) : planCursorRulesInstall(projectDir, force);
   if ("ok" in plan) throw new CliError(plan.message);
-  executeCursorMcpWrite(plan);
-  process.stdout.write(`OpenPets configured for Cursor in ${projectDir}.\nPet: ${sanitizeTerminalText(selectedPet.displayName)} (${selectedPet.id})\n${plan.backupPath ? `Backup: ${plan.backupPath}\n` : ""}Restart or reload Cursor in this project to load OpenPets.\nTo remove, delete mcpServers.openpets from ${configPath}.\n`);
+  executeCursorRulesWrite(plan);
+  process.stdout.write(`Installed OpenPets Cursor rules in ${projectDir}.\nRules file: ${rulesPath}\n${plan.backupPath ? `Backup: ${plan.backupPath}\n` : ""}Cursor may use changed rules in a new or refreshed chat.\n`);
+}
+
+function removeCursorRulesOnly(projectDir: string, rulesPath: string): void {
+  const readResult = readCursorOpenPetsRules(projectDir);
+  const status = classifyCursorRulesStatus(readResult, rulesPath);
+  process.stdout.write(`Cursor rules: ${rulesPath}\nRules status: ${status.status} - ${status.message}\n`);
+  if (status.status === "missing") {
+    process.stdout.write("OpenPets Cursor rules are already absent.\n");
+    return;
+  }
+  if (status.status === "invalid" || status.status === "error") throw new CliError(`${status.message} Fix ${rulesPath}, then rerun setup.`);
+  if (status.status === "conflict") throw new CliError("Cannot remove .cursor/rules/openpets.mdc because it is not managed by OpenPets.");
+  const plan = planCursorRulesRemove(projectDir);
+  if ("ok" in plan) throw new CliError(plan.message);
+  executeCursorRulesWrite(plan);
+  process.stdout.write(`Removed OpenPets Cursor rules from ${projectDir}.\n${plan.backupPath ? `Backup: ${plan.backupPath}\n` : ""}Cursor may use changed rules in a new or refreshed chat.\n`);
 }
 
 async function configureOpenCodeProject(options: ConfigureOptions, projectDir: string): Promise<void> {
@@ -240,11 +304,15 @@ export function parseConfigureArgs(args: readonly string[]): ConfigureOptions {
   let yes = false;
   let force = false;
   let localDev = false;
+  let cursorRulesMode: ConfigureOptions["cursorRulesMode"];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--yes" || arg === "-y") yes = true;
     else if (arg === "--force" || arg === "--replace") force = true;
     else if (arg === "--local-dev") localDev = true;
+    else if (arg === "--with-rules") cursorRulesMode = setCursorRulesMode(cursorRulesMode, "with");
+    else if (arg === "--rules-only") cursorRulesMode = setCursorRulesMode(cursorRulesMode, "only");
+    else if (arg === "--remove-rules") cursorRulesMode = setCursorRulesMode(cursorRulesMode, "remove");
     else if (arg === "--agent") { agent = readRequiredArg(args, index, "--agent"); index += 1; }
     else if (arg.startsWith("--agent=")) agent = arg.slice("--agent=".length);
     else if (arg === "--pet") { petId = validateOpenPetsPetArg(readRequiredArg(args, index, "--pet")); index += 1; }
@@ -254,7 +322,13 @@ export function parseConfigureArgs(args: readonly string[]): ConfigureOptions {
     else throw new CliError(`Unknown configure option: ${arg}`);
   }
   if (agent !== "claude" && agent !== "opencode" && agent !== "cursor") throw new CliError(`Unsupported agent: ${agent}. Supported agents: claude, opencode, cursor.`);
-  return { agent, petId, cwd, yes, force, localDev };
+  if (cursorRulesMode && agent !== "cursor") throw new CliError("Cursor rules flags require --agent cursor.");
+  return { agent, petId, cwd, yes, force, localDev, cursorRulesMode };
+}
+
+function setCursorRulesMode(current: ConfigureOptions["cursorRulesMode"], next: ConfigureOptions["cursorRulesMode"]): ConfigureOptions["cursorRulesMode"] {
+  if (current && current !== next) throw new CliError("Use only one of --with-rules, --rules-only, or --remove-rules.");
+  return next;
 }
 
 export function parseInstallArgs(args: readonly string[]): InstallOptions {
@@ -489,7 +563,7 @@ function getPackageVersion(): string {
 }
 
 function printUsage(): void {
-  process.stdout.write("Usage:\n  openpets status\n  openpets pets\n  openpets react <reaction>\n  openpets say <message> [--reaction <reaction>]\n  openpets install <pet-id>\n  openpets configure [--agent claude|opencode|cursor] [--pet <id>] [--cwd <path>] [--yes] [--force]\n  openpets mcp [--pet <id>]\n  openpets hook --openpets-managed [--pet <id>]\n\nRun `openpets <command> --help` for command options.\n");
+  process.stdout.write("Usage:\n  openpets status\n  openpets pets\n  openpets react <reaction>\n  openpets say <message> [--reaction <reaction>]\n  openpets install <pet-id>\n  openpets configure [--agent claude|opencode|cursor] [--pet <id>] [--cwd <path>] [--yes] [--force] [--with-rules|--rules-only|--remove-rules]\n  openpets mcp [--pet <id>]\n  openpets hook --openpets-managed [--pet <id>]\n\nRun `openpets <command> --help` for command options.\n");
 }
 
 function printInstallUsage(): void {
@@ -513,7 +587,7 @@ function printSayUsage(): void {
 }
 
 function printConfigureUsage(): void {
-  process.stdout.write("Usage:\n  openpets configure [--agent claude|opencode|cursor] [--pet <id>] [--cwd <path>] [--yes] [--force]\n\nOptions:\n  --pet <id>           Pet id to use for this project. If omitted, prompts with installed pets.\n  --agent <agent>      Agent to configure: claude, opencode, or cursor. Defaults to claude.\n  --cwd <path>         Project directory to configure. Defaults to current directory. Cursor uses <cwd>/.cursor/mcp.json; global Cursor setup is not enabled here.\n  --yes, -y            Accepted for scripts; no confirmation prompt is shown.\n  --force              Replace supported managed entries where applicable.\n  --replace            Alias for --force.\n  --local-dev          Use local development command paths where supported.\n  -h, --help           Show this help.\n");
+  process.stdout.write("Usage:\n  openpets configure [--agent claude|opencode|cursor] [--pet <id>] [--cwd <path>] [--yes] [--force] [--with-rules|--rules-only|--remove-rules]\n\nOptions:\n  --pet <id>           Pet id to use for this project. If omitted, prompts with installed pets. Cursor --rules-only/--remove-rules do not need a pet.\n  --agent <agent>      Agent to configure: claude, opencode, or cursor. Defaults to claude.\n  --cwd <path>         Project directory to configure. Defaults to current directory. Cursor uses <cwd>/.cursor/mcp.json and <cwd>/.cursor/rules/openpets.mdc; global Cursor setup is not enabled here.\n  --with-rules         For Cursor, install MCP config and project rules after preflighting both writes.\n  --rules-only         For Cursor, install/update only .cursor/rules/openpets.mdc.\n  --remove-rules       For Cursor, remove only managed .cursor/rules/openpets.mdc.\n  --yes, -y            Accepted for scripts; no confirmation prompt is shown.\n  --force              Replace supported managed entries where applicable. Required for conflicting Cursor rules.\n  --replace            Alias for --force.\n  --local-dev          Use local development command paths where supported.\n  -h, --help           Show this help.\n");
 }
 
 function printMcpUsage(): void {

@@ -124,6 +124,15 @@ try {
   assert.equal(preview.mcpServers.openpets.command, "npx");
   assert.ok(Array.isArray(preview.mcpServers.openpets.args));
 
+  // Test desktop Phase 2 rules posture: preview/copy only, no project writes
+  const rulesPreview = {
+    rulesPath: ".cursor/rules/openpets.mdc",
+    rulesContent: "<!-- OPENPETS:CURSOR_RULES:START -->\nUse OpenPets sparingly.\n<!-- OPENPETS:CURSOR_RULES:END -->\n",
+  };
+  assert.equal(rulesPreview.rulesPath, ".cursor/rules/openpets.mdc");
+  assert.match(rulesPreview.rulesContent, /OPENPETS:CURSOR_RULES:START/);
+  assert.doesNotMatch(rulesPreview.rulesContent, /alwaysApply:\s*true/);
+
   console.error("Cursor desktop validation passed.");
 } finally {
   rmSync(root, { recursive: true, force: true });

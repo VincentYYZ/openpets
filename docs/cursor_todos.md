@@ -85,8 +85,14 @@ This checklist tracks Cursor implementation work. Each phase has an Oracle appro
 
 ### Phase 2 — Cursor rules
 
-- [ ] Design rules install/remove separately.
-- [ ] **Oracle review before implementation.**
+- [x] Draft Phase 2 rules spec in `docs/cursor-phase-2-rules-spec.md`.
+- [x] **Oracle review before implementation.**
+- [x] Run/record Cursor rules validation spike.
+- [x] Implement `@open-pets/cursor` rules helpers.
+- [x] Add CLI project-local rules install/update/remove flow.
+- [x] Add desktop rules preview/copy guidance only, unless separately reviewed.
+- [x] Run package and full checks.
+- [x] **Oracle final review/approval gate.**
 
 ### Phase 3 — Cursor hooks
 

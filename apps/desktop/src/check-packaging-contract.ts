@@ -213,6 +213,10 @@ assert.match(preloadSource, /cursor-install/, "Agent Setup preload must bind Cur
 assert.match(preloadSource, /cursor-replace/, "Agent Setup preload must bind Cursor replace actions.");
 assert.match(preloadSource, /cursor-remove/, "Agent Setup preload must bind Cursor remove actions.");
 assert.match(preloadSource, /cursor-copy-preview/, "Agent Setup preload must bind Cursor copy-preview actions.");
+assert.match(agentSetupHtmlSource, /cursor-rules-preview/, "Agent Setup must show a Cursor project rules preview.");
+assert.match(agentSetupHtmlSource, /Desktop does not write project rules/, "Desktop Cursor rules UI must be preview/copy only.");
+assert.match(preloadSource, /cursor-copy-rules/, "Agent Setup preload must bind Cursor rules copy actions.");
+assert.doesNotMatch(agentSetupSource, /planCursorRules|executeCursorRules|cursor-rules-install|cursor-rules-remove/, "Desktop must not write Cursor project rules without a reviewed project picker.");
 assert.match(preloadSource, /updateCursorIntegration/, "Agent Setup preload must render Cursor integration.");
 assert.match(preloadSource, /cursorStatus/, "Agent Setup preload must check Cursor status.");
 assert.match(preloadSource, /cursorPreview/, "Agent Setup preload must render Cursor preview.");

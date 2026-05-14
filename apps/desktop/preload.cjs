@@ -319,6 +319,10 @@ function updateCursorIntegration(snapshot, selected) {
   }
   const json = document.getElementById("cursor-json-preview");
   if (json) json.textContent = JSON.stringify(preview.mcpEntry && preview.mcpEntry.openpets ? { mcpServers: preview.mcpEntry } : { mcpServers: {} }, null, 2);
+  const rulesPath = document.getElementById("cursor-rules-path");
+  if (rulesPath) rulesPath.textContent = `Project rules file: ${preview.rulesPath || ".cursor/rules/openpets.mdc"}. CLI: openpets configure --agent cursor --rules-only`;
+  const rulesPreview = document.getElementById("cursor-rules-preview");
+  if (rulesPreview) rulesPreview.textContent = preview.rulesContent || "";
   const result = document.getElementById("cursor-action-result");
   if (result) result.textContent = snapshot.lastAction && String(snapshot.lastAction.action).startsWith("cursor-") ? snapshot.lastAction.message : "Cursor may need to be restarted or reloaded after MCP config changes.";
   bindAgentSetupButton("cursor-install", () => runAgentAction("cursor-install", select instanceof HTMLSelectElement ? select.value : selected, getCommandMode()), snapshot.busy || !cursor.canInstall, "Installing…");
@@ -327,6 +331,7 @@ function updateCursorIntegration(snapshot, selected) {
   bindAgentSetupButton("cursor-refresh", () => renderAgentSetup(select instanceof HTMLSelectElement ? select.value : selected, getCommandMode()), snapshot.busy, "Refreshing…");
   bindAgentSetupButton("cursor-node-command-path-save", () => saveAgentCommandPath("node", cursorNodeCommandPath instanceof HTMLInputElement ? cursorNodeCommandPath.value : "", select instanceof HTMLSelectElement ? select.value : selected, getCommandMode(), "cursor-action-result"), snapshot.busy, "Saving…");
   bindAgentSetupButton("cursor-copy-preview", async () => copyText(requireElement("cursor-json-preview").textContent || "", "cursor-action-result", "Copied Cursor MCP preview."), false);
+  bindAgentSetupButton("cursor-copy-rules", async () => copyText(requireElement("cursor-rules-preview").textContent || "", "cursor-action-result", "Copied Cursor rules preview."), false);
   if (select instanceof HTMLSelectElement) select.onchange = () => { void renderAgentSetup(select.value, getCommandMode()); };
 }
 
@@ -581,7 +586,7 @@ function memoryStatusClassFor(status) {
 }
 
 function decorateAgentSetupButtons() {
-  for (const id of ["claude-configure", "claude-refresh", "claude-command-path-save", "node-command-path-save", "claude-copy-command", "claude-replace", "claude-remove", "claude-memory-install", "claude-hooks-doctor", "claude-hooks-install", "claude-hooks-uninstall", "opencode-install", "opencode-remove", "opencode-refresh", "opencode-command-path-save", "opencode-node-command-path-save", "opencode-copy-config", "pi-copy-global-install", "pi-copy-project-install", "cursor-install", "cursor-replace", "cursor-remove", "cursor-refresh", "cursor-node-command-path-save", "cursor-copy-preview"]) {
+  for (const id of ["claude-configure", "claude-refresh", "claude-command-path-save", "node-command-path-save", "claude-copy-command", "claude-replace", "claude-remove", "claude-memory-install", "claude-hooks-doctor", "claude-hooks-install", "claude-hooks-uninstall", "opencode-install", "opencode-remove", "opencode-refresh", "opencode-command-path-save", "opencode-node-command-path-save", "opencode-copy-config", "pi-copy-global-install", "pi-copy-project-install", "cursor-install", "cursor-replace", "cursor-remove", "cursor-refresh", "cursor-node-command-path-save", "cursor-copy-preview", "cursor-copy-rules"]) {
     const button = document.getElementById(id);
     if (button instanceof HTMLButtonElement) delete button.dataset.loading;
   }
@@ -609,6 +614,7 @@ function decorateAgentSetupButtons() {
   setIconButtonContent(requireButton("cursor-refresh"), "refresh", "Refresh");
   setIconButtonContent(requireButton("cursor-node-command-path-save"), "check", "Save path");
   setIconButtonContent(requireButton("cursor-copy-preview"), "copy", "Copy preview");
+  setIconButtonContent(requireButton("cursor-copy-rules"), "copy", "Copy rules preview");
 }
 
 function updateClaudeDetailActions(snapshot) {
@@ -722,6 +728,7 @@ function setAgentSetupControlsBusy(busy) {
     "cursor-refresh",
     "cursor-node-command-path-save",
     "cursor-copy-preview",
+    "cursor-copy-rules",
   ];
   if (busy) {
     agentSetupControlStates = new Map();
@@ -1622,6 +1629,8 @@ function isAgentSetupSnapshot(value) {
     && typeof value.cursorStatus.label === "string"
     && typeof value.cursorStatus.details === "string"
     && typeof value.cursorStatus.configPath === "string"
+    && typeof value.cursorPreview.rulesPath === "string"
+    && typeof value.cursorPreview.rulesContent === "string"
     && typeof value.cursorStatus.canInstall === "boolean"
     && typeof value.cursorStatus.canReplace === "boolean"
     && typeof value.cursorStatus.canRemove === "boolean";

@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import {
+  buildCursorOpenPetsRule,
+  buildCursorRulesPreview,
+  classifyCursorRulesStatus,
+  cursorRulesEndMarker,
+  cursorRulesStartMarker,
+  executeCursorRulesWrite,
+  getCursorProjectRulesPath,
+  isManagedCursorOpenPetsRule,
+  maxCursorRulesBytes,
+  planCursorRulesInstall,
+  planCursorRulesRemove,
+  planCursorRulesReplace,
+  readCursorOpenPetsRules,
+} from "./cursor-rules.js";
 import {
   buildCursorMcpEntry,
   formatCursorMcpConfig,
@@ -578,6 +593,165 @@ try {
     const emptyRemovedContent = JSON.parse(readFileSync(emptyAfterRemovePath, "utf8"));
     assert.deepEqual(emptyRemovedContent.mcpServers, {});
   }
+
+  // Test Cursor rules path and content generation
+  const rulesProject = join(root, "rules-project");
+  mkdirSync(rulesProject);
+  const rulesPath = getCursorProjectRulesPath(rulesProject);
+  assert.equal(rulesPath, join(rulesProject, ".cursor", "rules", "openpets.mdc"));
+  const expectedRule = buildCursorOpenPetsRule();
+  assert.equal(buildCursorRulesPreview(), expectedRule);
+  assert.match(expectedRule, /description: Use OpenPets MCP tools/);
+  assert.doesNotMatch(expectedRule, /alwaysApply:\s*true/);
+  assert.match(expectedRule, /openpets_say/);
+  assert.match(expectedRule, /Do not send prompts, tool input\/output/);
+
+  const missingRulesResult = readCursorOpenPetsRules(rulesProject);
+  assert.equal(missingRulesResult.ok, true);
+  if (missingRulesResult.ok) {
+    assert.equal(missingRulesResult.exists, false);
+  }
+  const missingRulesStatus = classifyCursorRulesStatus(missingRulesResult, rulesPath);
+  assert.equal(missingRulesStatus.status, "missing");
+  assert.equal(missingRulesStatus.canInstall, true);
+  assert.equal(missingRulesStatus.canReplace, false);
+  assert.equal(missingRulesStatus.canRemove, false);
+
+  const rulesInstallPlan = planCursorRulesInstall(rulesProject);
+  assert.equal("targetPath" in rulesInstallPlan, true);
+  if ("targetPath" in rulesInstallPlan) {
+    executeCursorRulesWrite(rulesInstallPlan);
+    assert.equal(readFileSync(rulesPath, "utf8"), expectedRule);
+  }
+
+  const installedRulesStatus = classifyCursorRulesStatus(readCursorOpenPetsRules(rulesProject), rulesPath);
+  assert.equal(installedRulesStatus.status, "installed");
+  assert.equal(installedRulesStatus.canInstall, false);
+  assert.equal(installedRulesStatus.canRemove, true);
+  assert.equal(isManagedCursorOpenPetsRule(expectedRule), true);
+
+  const changedManagedRule = expectedRule.replace("major milestones", "meaningful milestones");
+  writeFileSync(rulesPath, changedManagedRule, "utf8");
+  const needsUpdateRulesStatus = classifyCursorRulesStatus(readCursorOpenPetsRules(rulesProject), rulesPath);
+  assert.equal(needsUpdateRulesStatus.status, "needs-update");
+  const updateRulesPlan = planCursorRulesInstall(rulesProject);
+  assert.equal("targetPath" in updateRulesPlan, true);
+  if ("targetPath" in updateRulesPlan) {
+    assert.equal(updateRulesPlan.backupPath !== undefined, true);
+    executeCursorRulesWrite(updateRulesPlan);
+    assert.equal(readFileSync(rulesPath, "utf8"), expectedRule);
+    assert.equal(existsSync(updateRulesPlan.backupPath!), true);
+  }
+
+  const removeRulesPlan = planCursorRulesRemove(rulesProject);
+  assert.equal("targetPath" in removeRulesPlan, true);
+  if ("targetPath" in removeRulesPlan) {
+    executeCursorRulesWrite(removeRulesPlan);
+    assert.equal(existsSync(rulesPath), false);
+    assert.equal(existsSync(join(rulesProject, ".cursor", "rules")), true);
+    assert.equal(existsSync(removeRulesPlan.backupPath!), true);
+  }
+
+  // Test rules conflicts and marker/frontmatter edge cases
+  mkdirSync(join(rulesProject, ".cursor", "rules"), { recursive: true });
+  writeFileSync(rulesPath, "User-authored Cursor rule\n", "utf8");
+  const unmanagedStatus = classifyCursorRulesStatus(readCursorOpenPetsRules(rulesProject), rulesPath);
+  assert.equal(unmanagedStatus.status, "conflict");
+  assert.equal(unmanagedStatus.canInstall, false);
+  assert.equal(unmanagedStatus.canReplace, true);
+  assert.equal(unmanagedStatus.canRemove, false);
+  const noWriteRulesConflict = planCursorRulesInstall(rulesProject);
+  assert.equal("ok" in noWriteRulesConflict, true);
+  if ("ok" in noWriteRulesConflict) {
+    assert.equal(noWriteRulesConflict.ok, false);
+  }
+  const noRemoveRulesConflict = planCursorRulesRemove(rulesProject);
+  assert.equal("ok" in noRemoveRulesConflict, true);
+  if ("ok" in noRemoveRulesConflict) {
+    assert.equal(noRemoveRulesConflict.ok, false);
+  }
+  const replaceRulesPlan = planCursorRulesReplace(rulesProject);
+  assert.equal("targetPath" in replaceRulesPlan, true);
+  if ("targetPath" in replaceRulesPlan) {
+    assert.equal(replaceRulesPlan.backupPath !== undefined, true);
+    executeCursorRulesWrite(replaceRulesPlan);
+    assert.equal(readFileSync(rulesPath, "utf8"), expectedRule);
+    assert.equal(readFileSync(replaceRulesPlan.backupPath!, "utf8"), "User-authored Cursor rule\n");
+  }
+
+  const duplicateMarkers = expectedRule.replace(cursorRulesEndMarker, `${cursorRulesEndMarker}\n${cursorRulesEndMarker}`);
+  const reversedMarkers = `---\ndescription: Use OpenPets MCP tools for lightweight coding-status feedback.\n---\n\n${cursorRulesEndMarker}\nbody\n${cursorRulesStartMarker}\n`;
+  const missingMarker = expectedRule.replace(cursorRulesStartMarker, "");
+  const userBefore = `User note\n${expectedRule}`;
+  const userAfter = `${expectedRule}\nUser note\n`;
+  const unknownFrontmatter = expectedRule.replace("---\ndescription", "---\nalwaysApply: true\ndescription");
+  for (const content of [duplicateMarkers, reversedMarkers, missingMarker, userBefore, userAfter, unknownFrontmatter]) {
+    writeFileSync(rulesPath, content, "utf8");
+    const status = classifyCursorRulesStatus(readCursorOpenPetsRules(rulesProject), rulesPath);
+    assert.equal(status.status, "conflict");
+  }
+
+  // Test rules invalid path, symlink, non-regular, and oversized handling
+  const rulesFileParentProject = join(root, "rules-file-parent");
+  mkdirSync(rulesFileParentProject);
+  writeFileSync(join(rulesFileParentProject, ".cursor"), "not a dir", "utf8");
+  const rulesFileParentResult = readCursorOpenPetsRules(rulesFileParentProject);
+  assert.equal(rulesFileParentResult.ok, false);
+  if (!rulesFileParentResult.ok) assert.equal(rulesFileParentResult.reason, "unsafe-path");
+
+  const rulesSymlinkProject = join(root, "rules-symlink");
+  const rulesSymlinkOutside = join(root, "rules-outside");
+  mkdirSync(rulesSymlinkProject);
+  mkdirSync(rulesSymlinkOutside);
+  symlinkSync(rulesSymlinkOutside, join(rulesSymlinkProject, ".cursor"));
+  const rulesSymlinkResult = readCursorOpenPetsRules(rulesSymlinkProject);
+  assert.equal(rulesSymlinkResult.ok, false);
+  if (!rulesSymlinkResult.ok) assert.equal(rulesSymlinkResult.reason, "symlink");
+
+  const rulesFileSymlinkProject = join(root, "rules-file-symlink");
+  mkdirSync(join(rulesFileSymlinkProject, ".cursor", "rules"), { recursive: true });
+  const rulesFileSymlinkTarget = join(root, "rules-file-target.mdc");
+  writeFileSync(rulesFileSymlinkTarget, expectedRule, "utf8");
+  symlinkSync(rulesFileSymlinkTarget, getCursorProjectRulesPath(rulesFileSymlinkProject));
+  const rulesFileSymlinkResult = readCursorOpenPetsRules(rulesFileSymlinkProject);
+  assert.equal(rulesFileSymlinkResult.ok, false);
+  if (!rulesFileSymlinkResult.ok) assert.equal(rulesFileSymlinkResult.reason, "symlink");
+  const rulesFileSymlinkPlan = planCursorRulesInstall(rulesFileSymlinkProject);
+  assert.equal("ok" in rulesFileSymlinkPlan, true);
+  if ("ok" in rulesFileSymlinkPlan) assert.equal(rulesFileSymlinkPlan.ok, false);
+
+  const danglingRulesSymlinkProject = join(root, "rules-dangling-symlink");
+  mkdirSync(join(danglingRulesSymlinkProject, ".cursor", "rules"), { recursive: true });
+  symlinkSync(join(root, "missing-rules-target.mdc"), getCursorProjectRulesPath(danglingRulesSymlinkProject));
+  const danglingRulesResult = readCursorOpenPetsRules(danglingRulesSymlinkProject);
+  assert.equal(danglingRulesResult.ok, false);
+  if (!danglingRulesResult.ok) assert.equal(danglingRulesResult.reason, "symlink");
+
+  const nonRegularRulesProject = join(root, "rules-non-regular");
+  mkdirSync(join(nonRegularRulesProject, ".cursor", "rules"), { recursive: true });
+  mkdirSync(getCursorProjectRulesPath(nonRegularRulesProject));
+  const nonRegularRules = readCursorOpenPetsRules(nonRegularRulesProject);
+  assert.equal(nonRegularRules.ok, false);
+  if (!nonRegularRules.ok) assert.equal(nonRegularRules.reason, "not-regular");
+  const nonRegularRulesInstallPlan = planCursorRulesInstall(nonRegularRulesProject);
+  assert.equal("ok" in nonRegularRulesInstallPlan, true);
+  if ("ok" in nonRegularRulesInstallPlan) assert.equal(nonRegularRulesInstallPlan.ok, false);
+  assert.equal(lstatSync(getCursorProjectRulesPath(nonRegularRulesProject)).isDirectory(), true);
+
+  const oversizedRulesProject = join(root, "rules-oversized");
+  mkdirSync(join(oversizedRulesProject, ".cursor", "rules"), { recursive: true });
+  writeFileSync(getCursorProjectRulesPath(oversizedRulesProject), "x".repeat(maxCursorRulesBytes + 1), "utf8");
+  const oversizedRules = readCursorOpenPetsRules(oversizedRulesProject);
+  assert.equal(oversizedRules.ok, false);
+  if (!oversizedRules.ok) assert.equal(oversizedRules.reason, "size");
+  const oversizedBefore = readFileSync(getCursorProjectRulesPath(oversizedRulesProject), "utf8");
+  const oversizedInstallPlan = planCursorRulesInstall(oversizedRulesProject);
+  assert.equal("ok" in oversizedInstallPlan, true);
+  if ("ok" in oversizedInstallPlan) assert.equal(oversizedInstallPlan.ok, false);
+  const oversizedRemovePlan = planCursorRulesRemove(oversizedRulesProject);
+  assert.equal("ok" in oversizedRemovePlan, true);
+  if ("ok" in oversizedRemovePlan) assert.equal(oversizedRemovePlan.ok, false);
+  assert.equal(readFileSync(getCursorProjectRulesPath(oversizedRulesProject), "utf8"), oversizedBefore);
 
   console.error("Cursor validation passed.");
 } finally {
