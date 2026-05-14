@@ -105,7 +105,6 @@ npx -y @open-pets/mcp@latest --pet <pet-id>
 ## Public resources
 
 - Website: https://openpets.dev
-- Gallery: https://openpets.dev/gallery
 - Pet catalog: https://openpets.dev/pets/catalog.v3.json
 - GitHub issues: https://github.com/alvinunreal/openpets/issues
 

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/hello.png" alt="OpenPets reacting across multiple coding agent sessions" width="100%" />
+  <img src="assets/intro.png" alt="OpenPets reacting across multiple coding agent sessions" width="100%" />
 </p>
 
 ---
@@ -33,14 +33,14 @@ Use the OpenPets skill. Install OpenPets for me, connect this agent, and verify 
 For project setup, open your agent inside the repo and say:
 
 ```text
-Use the OpenPets skill. Make sure pet <petId> is installed, configure this project to use it, and verify the project integration.
+Use the OpenPets skill. Help me choose or install a pet, configure it for this project, and verify the project integration.
 ```
 
 Useful prompts:
 
 ```text
-Use the OpenPets skill. Configure this project for Claude Code with pet <petId>.
-Use the OpenPets skill. Configure this project for OpenCode with pet <petId>.
+Use the OpenPets skill. Configure this project for Claude Code with a pet.
+Use the OpenPets skill. Configure this project for OpenCode with a pet.
 Use the OpenPets skill. Debug why openpets_status is unavailable.
 ```
 

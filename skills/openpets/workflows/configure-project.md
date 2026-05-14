@@ -6,18 +6,28 @@ Use this workflow when the user asks to configure the current project or a named
 
 - Which agent/client should be configured? Common values: `claude`, `opencode`, `cursor`.
 - Which project path should be configured?
-- Which pet id should be selected?
+- Which pet should be selected? If the user has not chosen one, list installed pets and use the catalog API to help them choose or install one.
 - Is it okay to update project-local config files?
 
 ## Before configuring
 
-Make sure the selected pet exists locally. List installed pets first:
+Make sure the selected pet exists locally. If the user did not provide a pet id, start by listing installed pets:
 
 ```bash
 openpets pets
 ```
 
-If `<pet-id>` is not listed, install it before writing project config:
+If the user wants a pet that is not installed, use the catalog API to confirm the pet id, then install it before writing project config.
+
+- https://openpets.dev/pets/catalog.v3.json
+
+Catalog search flow:
+
+1. Fetch `catalog.v3.json`.
+2. Fetch its `search` URL.
+3. Fetch the listed `search-page-XXX.json` pages.
+4. Match user words against each entry's `searchText`, `id`, and `displayName`.
+5. Fetch the matching entry's `catalogPage` from `catalog.v3/page-XXX.json` to get install metadata.
 
 ```bash
 openpets install <pet-id>

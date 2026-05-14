@@ -6,7 +6,6 @@ Recommended public references:
 
 ```text
 https://openpets.dev
-https://openpets.dev/gallery
 https://openpets.dev/pets/catalog.v3.json
 ```
 

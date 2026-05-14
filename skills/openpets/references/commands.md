@@ -25,9 +25,10 @@ MCP package:
 npx -y @open-pets/mcp@latest --pet <pet-id>
 ```
 
-Pet catalog and gallery:
+Pet catalog:
 
 ```text
-https://openpets.dev/gallery
 https://openpets.dev/pets/catalog.v3.json
 ```
+
+For search, fetch `catalog.v3.json`, then fetch its `search` URL and the listed search pages. Use matching search entries' `catalogPage` values to fetch `catalog.v3/page-XXX.json` pages for install metadata.

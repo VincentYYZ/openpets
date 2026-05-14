@@ -27,7 +27,7 @@ openpets pets
 - Launch or relaunch the OpenPets desktop app.
 - Re-run the relevant `openpets configure ...` command.
 - Restart the agent/client after changing MCP/plugin/hook config.
-- Use the gallery/catalog to confirm pet ids.
+- Use the catalog API to confirm pet ids: https://openpets.dev/pets/catalog.v3.json
 
 If the CLI is not installed globally, replace `openpets` with `npx -y @open-pets/cli@latest`.
 
