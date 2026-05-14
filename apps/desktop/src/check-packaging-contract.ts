@@ -72,6 +72,7 @@ const mappingDoc = readFileSync(join(repoRoot, "docs", "mapping.md"), "utf8");
 assert.match(loggerSource, /openpets\.log/, "desktop logger must write a user-sendable openpets.log file.");
 assert.match(loggerSource, /openpets\.previous\.log/, "desktop logger must retain a previous log file for bug reports.");
 assert.match(loggerSource, /OPENPETS_LOG_LEVEL/, "desktop logger must support verbose dev logging via environment.");
+assert.match(loggerSource, /normalizeLogLevel\(process\.env\.OPENPETS_LOG_LEVEL\) \?\? "debug"/, "desktop production logger must default to debug for user-sendable diagnostics.");
 assert.match(loggerSource, /redacted-token/, "desktop logger must redact token-looking values.");
 assert.match(mainSource, /initializeLogger\(\)/, "desktop startup must initialize logging before subsystem startup.");
 assert.match(localIpcSourceForLogging, /request received/, "desktop IPC must log request methods for diagnostics.");

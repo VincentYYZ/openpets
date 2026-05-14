@@ -11,7 +11,7 @@ type LogFields = Record<string, unknown>;
 const levelPriority = { debug: 10, info: 20, warn: 30, error: 40 } as const satisfies Record<LogLevel, number>;
 const maxLogBytes = 2 * 1024 * 1024;
 
-let configuredLevel: LogLevel = normalizeLogLevel(process.env.OPENPETS_LOG_LEVEL) ?? (isDevRun() ? "debug" : "info");
+let configuredLevel: LogLevel = normalizeLogLevel(process.env.OPENPETS_LOG_LEVEL) ?? "debug";
 let logFilePath: string | null = null;
 let previousLogFilePath: string | null = null;
 let mirrorToConsole = isDevRun() || process.env.OPENPETS_LOG_CONSOLE === "1";
