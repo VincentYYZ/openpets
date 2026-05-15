@@ -37,6 +37,23 @@ ipcRenderer.on("openpets:pet-reaction-state", (_event, state) => {
   }
 });
 
+ipcRenderer.on("openpets:pet-content-state", (_event, state) => {
+  if (!state || typeof state.bodyHtml !== "string" || state.bodyHtml.length > 64 * 1024 || !allowedReactionStates.has(state.reactionState)) {
+    return;
+  }
+
+  const apply = () => {
+    document.documentElement.dataset.reactionState = state.reactionState;
+    document.body.innerHTML = state.bodyHtml;
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", apply, { once: true });
+  } else {
+    apply();
+  }
+});
+
 const getInteractiveTarget = (event) => {
   const target = document.elementFromPoint(event.clientX, event.clientY);
   return target && target.closest(".pet-shell, .bubble");

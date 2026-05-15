@@ -138,7 +138,8 @@ assert.match(petWindowSource, /did-finish-load", rearmAfterLoad/, "pet windows m
 assert.match(petWindowSource, /did-fail-load", handleLoadFailure/, "pet windows must restore passthrough after failed content loads.");
 assert.match(petWindowSource, /window\.setIgnoreMouseEvents\(false\);[\s\S]*?await window\.loadFile/, "pet reloads must reset OS mouse passthrough before navigation.");
 assert.match(petWindowSource, /function allocateWindowLoadSequence/, "pet content reloads must allocate request sequence before async rendering.");
-assert.match(petWindowSource, /loadPetHtmlFile\(window, html, "default", sequence\)/, "default pet reloads must preserve pre-render load sequence.");
+assert.match(petWindowSource, /tryUpdateLoadedPetContent\(window, render, "default", sequence\)/, "default pet transient updates must avoid BrowserWindow reloads when the pet document is already loaded.");
+assert.match(petPreloadSource, /openpets:pet-content-state[\s\S]*?document\.body\.innerHTML/, "pet preload must accept sanitized in-place content updates for transient bubbles and badges.");
 assert.match(petWindowSource, /windowLoadChains\.set\(window, next\)/, "pet content reloads must serialize loadFile calls per BrowserWindow.");
 assert.match(petWindowSource, /next\.catch\(\(\) => \{\}\)\.finally/, "pet content reload chain cleanup must not create unhandled rejections.");
 assert.match(petWindowSource, /destroyed-after-write/, "pet content reloads must re-check destroyed windows after writing HTML.");

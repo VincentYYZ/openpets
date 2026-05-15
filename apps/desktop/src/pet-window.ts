@@ -40,6 +40,13 @@ export type PetStatusBadgeReaction = Exclude<OpenPetsReaction, "idle">;
 type PetMotionState = "idle" | "run-left" | "run-right";
 type UniversalSpriteState = "idle" | "running-right" | "running-left" | "waving" | "jumping" | "failed" | "waiting" | "running" | "review";
 
+interface PetContentRender {
+  readonly html: string;
+  readonly bodyHtml: string;
+  readonly reactionState: UniversalSpriteState;
+  readonly cacheKey: string;
+}
+
 const motionToSpriteState = {
   idle: "idle",
   "run-right": "running-right",
@@ -59,6 +66,8 @@ const reactionToSpriteState = {
   error: "failed",
   celebrating: "jumping",
 } as const satisfies Record<OpenPetsReaction, UniversalSpriteState>;
+
+const petWindowRenderCache = new WeakMap<BrowserWindow, string>();
 
 const defaultPetSprite = {
   fileName: "default-pet-spritesheet.webp",
@@ -389,8 +398,11 @@ function applyPetAlwaysOnTop(window: BrowserWindow): void {
 export async function loadDefaultPetContent(window: BrowserWindow, paused: boolean, display: PetTransientDisplay | null = null, badge: PetStatusBadgeReaction | null = null): Promise<void> {
   const sequence = allocateWindowLoadSequence(window);
   debug("pet.window", "default content render begin", { windowId: window.id, sequence, paused, hasDisplay: Boolean(display), reaction: display?.reaction, hasMessage: Boolean(display?.message), badge, defaultPetId: getAppStateSnapshot().preferences.defaultPetId });
-  const html = await createDefaultPetHtml(paused, display, badge);
-  await loadPetHtmlFile(window, html, "default", sequence).catch((error: unknown) => {
+  const render = await createDefaultPetRender(paused, display, badge);
+  if (tryUpdateLoadedPetContent(window, render, "default", sequence)) return;
+  await loadPetHtmlFile(window, render.html, "default", sequence).then(() => {
+    petWindowRenderCache.set(window, render.cacheKey);
+  }).catch((error: unknown) => {
     logError("pet.window", "default content load failed", error instanceof Error ? error : { error });
     console.error("Failed to load default pet URL.", error);
   });
@@ -405,8 +417,10 @@ export async function loadExplicitPetContent(window: BrowserWindow, petId: strin
       throw new Error(`Cannot render explicit pet: ${petId}`);
     }
     debug("pet.window", "explicit content render begin", { windowId: window.id, sequence, petId, displayName: pet.displayName, hasDisplay: Boolean(display), reaction: display?.reaction, hasMessage: Boolean(display?.message), badge });
-    const html = await createInstalledPetHtml(pet.id, pet.displayName, false, display, state.preferences.petScale as PetScaleValue, badge);
-    await loadPetHtmlFile(window, html, `explicit-${pet.id}`, sequence);
+    const render = await createInstalledPetRender(pet.id, pet.displayName, false, display, state.preferences.petScale as PetScaleValue, badge, `explicit:${pet.id}`);
+    if (tryUpdateLoadedPetContent(window, render, `explicit-${pet.id}`, sequence)) return;
+    await loadPetHtmlFile(window, render.html, `explicit-${pet.id}`, sequence);
+    petWindowRenderCache.set(window, render.cacheKey);
   } catch (error: unknown) {
     logError("pet.window", "explicit content load failed", error instanceof Error ? error : { petId, error });
     console.error(`Failed to load explicit pet ${petId} URL.`, error);
@@ -448,6 +462,16 @@ export function setPetReactionState(window: BrowserWindow, state: UniversalSprit
   window.webContents.send("openpets:pet-reaction-state", state);
 }
 
+function tryUpdateLoadedPetContent(window: BrowserWindow, render: PetContentRender, name: string, sequence: number): boolean {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return false;
+  if (petWindowRenderCache.get(window) !== render.cacheKey) return false;
+  const url = window.webContents.getURL();
+  if (!isAllowedPetDocumentUrl(url)) return false;
+  debug("pet.window", "content update in place", { windowId: window.id, name, sequence, reactionState: render.reactionState });
+  window.webContents.send("openpets:pet-content-state", { bodyHtml: render.bodyHtml, reactionState: render.reactionState });
+  return true;
+}
+
 export function getSafeDefaultPetPosition(position: Point | undefined): Point {
   return clampToPrimaryWorkArea(position ?? getDefaultPetInitialPosition(), defaultPetWindowSize);
 }
@@ -457,19 +481,24 @@ export function readWindowPosition(window: BrowserWindow): Point {
   return clampToPrimaryWorkArea({ x, y }, defaultPetWindowSize);
 }
 
-async function createDefaultPetHtml(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null): Promise<string> {
-  const installedPetHtml = await tryCreateInstalledPetHtml(paused, display, badge);
-  if (installedPetHtml) {
-    return installedPetHtml;
+async function createDefaultPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null): Promise<PetContentRender> {
+  const installedPetRender = await tryCreateInstalledPetRender(paused, display, badge);
+  if (installedPetRender) {
+    return installedPetRender;
   }
 
   const spriteUrl = pathToFileURL(join(app.getAppPath(), "assets", defaultPetSprite.fileName)).toString();
-  const bubble = createBubbleMarkup(display, paused, badge);
+  const bodyHtml = createPetBodyMarkup("OpenPets default pet", createBubbleMarkup(display, paused, badge), `<div class="sprite" role="img" aria-label="Claude animated default pet"></div>`);
+  const reactionState = getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
   const scale = getAppStateSnapshot().preferences.petScale as PetScaleValue;
 
-  return `<!doctype html>
-    <html lang="en" data-reaction-state="${getReactionSpriteState(display?.reaction)}" data-motion-state="idle">
+  return {
+    cacheKey: `default:builtin:${paused}:${scale}`,
+    bodyHtml,
+    reactionState,
+    html: `<!doctype html>
+    <html lang="en" data-reaction-state="${reactionState}" data-motion-state="idle">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -501,17 +530,13 @@ async function createDefaultPetHtml(paused: boolean, display: PetTransientDispla
         </style>
       </head>
       <body>
-        <div class="stage" aria-label="OpenPets default pet">
-          ${bubble}
-          <div class="pet-shell">
-            <div class="sprite" role="img" aria-label="Claude animated default pet"></div>
-          </div>
-        </div>
+        ${bodyHtml}
       </body>
-    </html>`;
+    </html>`,
+  };
 }
 
-async function tryCreateInstalledPetHtml(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null): Promise<string | null> {
+async function tryCreateInstalledPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null): Promise<PetContentRender | null> {
   const state = getAppStateSnapshot();
   const selected = state.pets.installed.find((pet) => pet.id === state.preferences.defaultPetId);
 
@@ -520,7 +545,7 @@ async function tryCreateInstalledPetHtml(paused: boolean, display: PetTransientD
   }
 
   try {
-    return await createInstalledPetHtml(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge);
+    return await createInstalledPetRender(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge, `default:${selected.id}`);
   } catch (error) {
     console.error(`Failed to render installed default pet ${selected.id}; falling back to built-in pet.`, error);
     try {
@@ -532,7 +557,7 @@ async function tryCreateInstalledPetHtml(paused: boolean, display: PetTransientD
   }
 }
 
-async function createInstalledPetHtml(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null): Promise<string> {
+async function createInstalledPetRender(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null, cachePrefix: string): Promise<PetContentRender> {
   const spritesheetPath = join(getInstalledPetDir(petId), "spritesheet.webp");
   const spritesheet = await stat(spritesheetPath);
   if (!spritesheet.isFile() || spritesheet.size <= 0 || spritesheet.size > 100 * 1024 * 1024) {
@@ -540,11 +565,16 @@ async function createInstalledPetHtml(petId: string, displayName: string, paused
   }
 
   const imageUrl = pathToFileURL(spritesheetPath).toString();
-  const bubble = createBubbleMarkup(display, paused, badge);
+  const bodyHtml = createPetBodyMarkup(escapeHtml(displayName), createBubbleMarkup(display, paused, badge), `<div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}"><div class="installed-sprite"></div></div>`);
+  const reactionState = getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
 
-  return `<!doctype html>
-      <html lang="en" data-reaction-state="${getReactionSpriteState(display?.reaction)}" data-motion-state="idle">
+  return {
+    cacheKey: `${cachePrefix}:${paused}:${scale}:${spritesheet.mtimeMs}:${spritesheet.size}`,
+    bodyHtml,
+    reactionState,
+    html: `<!doctype html>
+      <html lang="en" data-reaction-state="${reactionState}" data-motion-state="idle">
         <head>
           <meta charset="utf-8" />
           <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -580,16 +610,19 @@ async function createInstalledPetHtml(petId: string, displayName: string, paused
           </style>
         </head>
         <body>
-          <div class="stage" aria-label="${escapeHtml(displayName)}">
-            ${bubble}
-            <div class="pet-shell">
-              <div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}">
-                <div class="installed-sprite"></div>
-              </div>
-            </div>
-          </div>
+          ${bodyHtml}
         </body>
-      </html>`;
+      </html>`,
+  };
+}
+
+function createPetBodyMarkup(stageLabel: string, bubble: string, spriteMarkup: string): string {
+  return `<div class="stage" aria-label="${stageLabel}">
+    ${bubble}
+    <div class="pet-shell">
+      ${spriteMarkup}
+    </div>
+  </div>`;
 }
 
 function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
