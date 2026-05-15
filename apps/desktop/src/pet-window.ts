@@ -644,8 +644,8 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
     .bubble { position: absolute; left: 50%; bottom: ${bubbleBottom}px; z-index: 4; box-sizing: border-box; display: inline-flex; flex-direction: column; width: fit-content; min-width: 92px; max-width: min(220px, calc(100vw - 18px)); max-height: 128px; padding: 10px 12px; background: linear-gradient(135deg, rgba(239, 246, 255, 0.97), rgba(237, 233, 254, 0.96)); color: #172033; font: 760 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 14px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16), 0 2px 5px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82); white-space: normal; overflow-wrap: break-word; word-break: normal; overflow: visible; pointer-events: auto; -webkit-app-region: no-drag; opacity: 1; backdrop-filter: ${bubbleBackdropFilter}; transform: translateX(-50%); transform-origin: 64% 100%; animation: bubble-in 180ms cubic-bezier(0.2, 0, 0, 1); }
     .bubble::after { content: ""; position: absolute; left: 64%; bottom: -7px; width: 12px; height: 12px; background: inherit; border-right: 1px solid rgba(255, 255, 255, 0.56); border-bottom: 1px solid rgba(255, 255, 255, 0.56); border-bottom-right-radius: 3px; transform: translateX(-50%) rotate(45deg); box-shadow: 3px 3px 7px rgba(15, 23, 42, 0.08); }
     .bubble-header { display: inline-flex; align-items: center; min-width: 0; gap: 7px; color: currentColor; font: 780 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0.01em; }
-    .bubble-status-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 16px; height: 16px; border-radius: 999px; background: #3b82f6; color: #fff; font-size: 10px; line-height: 1; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(59, 130, 246, 0.3); }
-    .bubble-status-icon::before { content: attr(data-icon); }
+    .bubble-status-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 999px; background: #3b82f6; color: #fff; font: 900 12px/18px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(59, 130, 246, 0.3); }
+    .bubble-status-icon::before { content: attr(data-icon); display: block; width: 18px; height: 18px; line-height: 18px; text-align: center; transform: none; }
     .bubble-status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .bubble-divider { height: 1px; width: 100%; margin: 8px 0; background: rgba(30, 58, 138, 0.12); }
     .bubble-body { min-width: 0; width: 100%; color: #172033; font: 720 10.5px/13.5px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -661,9 +661,10 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
     .bubble.is-success .bubble-status-icon { background: #10b981; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(16, 185, 129, 0.34); }
     .bubble.is-error .bubble-status-icon { background: #ef4444; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(239, 68, 68, 0.34); }
     .bubble.is-info .bubble-status-icon { background: #38bdf8; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(56, 189, 248, 0.34); }
-    .bubble.is-busy .bubble-status-icon::before { content: ""; display: block; width: 7px; height: 7px; border-radius: 999px; background: #fff; animation: status-pulse 820ms ease-in-out infinite; }
+    .bubble.is-busy .bubble-status-icon::before { content: ""; position: absolute; left: 50%; top: 50%; display: block; width: 8px; height: 8px; border-radius: 999px; background: #fff; animation: status-pulse 820ms ease-in-out infinite; transform: translate(-50%, -50%); transform-origin: center; }
+    .bubble.is-waiting .bubble-status-icon::before { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid rgba(255, 255, 255, 0.96); border-top-color: rgba(255, 255, 255, 0.28); border-radius: 999px; transform: translate(-50%, -50%); transform-origin: center; }
     @keyframes bubble-in { from { opacity: 0; transform: translateX(-50%) translateY(4px) scale(0.96); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
-    @keyframes status-pulse { 0%, 100% { transform: scale(0.72); opacity: 0.58; } 50% { transform: scale(1); opacity: 1; } }
+    @keyframes status-pulse { 0%, 100% { transform: translate(-50%, -50%) scale(0.72); opacity: 0.58; } 50% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
     @media (prefers-reduced-motion: reduce) { .sprite, .installed-sprite, .bubble, .bubble-status-icon::before { animation: none !important; } }
   `;
 }
@@ -703,7 +704,7 @@ function getStatusBadge(reaction: PetStatusBadgeReaction): { readonly className:
   if (reaction === "working" || reaction === "running") return { className: "is-busy", icon: "", label: "Working" };
   if (reaction === "editing") return { className: "is-busy", icon: "", label: "Editing" };
   if (reaction === "testing") return { className: "is-busy", icon: "", label: "Testing" };
-  if (reaction === "waiting") return { className: "is-waiting", icon: "◷", label: "Waiting" };
+  if (reaction === "waiting") return { className: "is-waiting", icon: "", label: "Waiting" };
   if (reaction === "success" || reaction === "celebrating") return { className: "is-success", icon: "✓", label: "Done" };
   if (reaction === "error") return { className: "is-error", icon: "!", label: "Oops" };
   if (reaction === "waving") return { className: "is-info", icon: "♪", label: "Hi" };
