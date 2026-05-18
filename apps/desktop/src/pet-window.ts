@@ -19,6 +19,11 @@ export interface DefaultPetWindowOptions {
   readonly badge: PetStatusBadgeReaction | null;
   readonly onPositionChanged: (position: Point) => void;
   readonly onHideRequested: () => void;
+  readonly onDragStarted?: () => void;
+  readonly onDragEnded?: () => void;
+  readonly onFolderDragEntered?: () => void;
+  readonly onFolderDragLeft?: () => void;
+  readonly onFolderDropped?: (paths: readonly string[]) => void;
   readonly onBubbleDismissed?: (dismissToken: string) => void;
 }
 
@@ -57,7 +62,7 @@ const windowLoadSequences = new WeakMap<BrowserWindow, number>();
 export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismissToken?: string): BrowserWindow {
   const window = createBasePetWindow("OpenPets — Default Pet", options.position);
   info("pet.window", "default window create", { windowId: window.id, position: options.position, paused: options.paused, hasDisplay: Boolean(options.display), badge: options.badge });
-  installMousePassthroughAndDrag(window, options.onBubbleDismissed);
+  installMousePassthroughAndDrag(window, options.onBubbleDismissed, options.onDragStarted, options.onDragEnded, options.onFolderDragEntered, options.onFolderDragLeft, options.onFolderDropped);
   installMotionStatePublisher(window);
   installPetContextMenu(window, { label: "Hide pet", click: options.onHideRequested });
 
@@ -104,7 +109,7 @@ function installPetContextMenu(window: BrowserWindow, action: { readonly label: 
   });
 }
 
-function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed?: (dismissToken: string) => void): void {
+function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed?: (dismissToken: string) => void, onDragStarted?: () => void, onDragEnded?: () => void, onFolderDragEntered?: () => void, onFolderDragLeft?: () => void, onFolderDropped?: (paths: readonly string[]) => void): void {
   let dragging: { readonly startScreenX: number; readonly startScreenY: number; readonly startWindowX: number; readonly startWindowY: number } | null = null;
   let rendererReady = false;
   let listenersRemoved = false;
@@ -213,6 +218,7 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
     const [startWindowX, startWindowY] = window.getPosition();
     dragging = { startScreenX: point.screenX, startScreenY: point.screenY, startWindowX, startWindowY };
     debug("pet.window", "drag start", { windowId, point, startWindowX, startWindowY });
+    onDragStarted?.();
     setPassthrough(false);
   };
 
@@ -225,12 +231,32 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
     if (!isFromWindow(event)) return;
     dragging = null;
     debug("pet.window", "drag end", { windowId, position: window.isDestroyed() ? null : readWindowPosition(window) });
+    onDragEnded?.();
   };
 
   const handleBubbleDismissed = (event: IpcMainEvent, dismissToken: unknown): void => {
     if (!isFromWindow(event)) return;
     debug("pet.window", "bubble dismissed", { windowId, dismissToken });
     if (typeof dismissToken === "string") onBubbleDismissed?.(dismissToken);
+  };
+
+  const handleFolderDragEnter = (event: IpcMainEvent): void => {
+    if (!isFromWindow(event)) return;
+    debug("pet.window", "folder drag enter", { windowId });
+    onFolderDragEntered?.();
+  };
+
+  const handleFolderDragLeave = (event: IpcMainEvent): void => {
+    if (!isFromWindow(event)) return;
+    debug("pet.window", "folder drag leave", { windowId });
+    onFolderDragLeft?.();
+  };
+
+  const handleFolderDropped = (event: IpcMainEvent, paths: unknown): void => {
+    if (!isFromWindow(event)) return;
+    const droppedPaths = Array.isArray(paths) ? paths.filter((path): path is string => typeof path === "string" && path.length > 0 && path.length < 2048).slice(0, 8) : [];
+    debug("pet.window", "folder dropped", { windowId, count: droppedPaths.length });
+    onFolderDropped?.(droppedPaths);
   };
 
   const resetForNavigation = (): void => {
@@ -269,6 +295,9 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
     ipcMain.off("openpets:pet-drag-move", handleDragMove);
     ipcMain.off("openpets:pet-drag-end", handleDragEnd);
     ipcMain.off("openpets:bubble-dismissed", handleBubbleDismissed);
+    ipcMain.off("openpets:pet-folder-drag-enter", handleFolderDragEnter);
+    ipcMain.off("openpets:pet-folder-drag-leave", handleFolderDragLeave);
+    ipcMain.off("openpets:pet-folder-dropped", handleFolderDropped);
     clearRearmTimers();
     if (!webContents.isDestroyed()) {
       webContents.off("did-start-navigation", resetForNavigation);
@@ -285,6 +314,9 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
   ipcMain.on("openpets:pet-drag-move", handleDragMove);
   ipcMain.on("openpets:pet-drag-end", handleDragEnd);
   ipcMain.on("openpets:bubble-dismissed", handleBubbleDismissed);
+  ipcMain.on("openpets:pet-folder-drag-enter", handleFolderDragEnter);
+  ipcMain.on("openpets:pet-folder-drag-leave", handleFolderDragLeave);
+  ipcMain.on("openpets:pet-folder-dropped", handleFolderDropped);
   webContents.on("did-start-navigation", resetForNavigation);
   webContents.on("did-start-loading", resetForNavigation);
   webContents.on("did-finish-load", rearmAfterLoad);
@@ -738,7 +770,7 @@ function installMotionStatePublisher(window: BrowserWindow): void {
     const deltaX = x - lastX;
     lastX = x;
 
-    if (Math.abs(deltaX) >= 3) {
+    if (Math.abs(deltaX) >= 1) {
       sendMotionState(deltaX > 0 ? "run-right" : "run-left");
     }
     scheduleIdle();

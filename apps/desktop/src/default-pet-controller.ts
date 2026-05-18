@@ -1,8 +1,10 @@
 import { BrowserWindow, screen } from "electron";
+import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 
 import { getAppStateSnapshot, getDefaultPetPosition, resetDefaultPetPosition, setDefaultPetPosition, updatePreferences } from "./app-state.js";
 import { defaultPetWindowSize, getDefaultPetInitialPosition } from "./display.js";
-import { debug, info } from "./logger.js";
+import { debug, error as logError, info } from "./logger.js";
 import { transientDisplayMs, type OpenPetsReaction } from "./local-ipc-protocol.js";
 import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetReactionState, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
 
@@ -13,8 +15,17 @@ let statusBadge: PetStatusBadgeReaction | null = null;
 let transientDisplayTimeout: NodeJS.Timeout | null = null;
 let transientAnimationTimeout: NodeJS.Timeout | null = null;
 let statusBadgeTimeout: NodeJS.Timeout | null = null;
+let autoWalkTimer: NodeJS.Timeout | null = null;
+let autoWalkDirection: -1 | 1 = Math.random() < 0.5 ? -1 : 1;
+let autoWalkSuspendedUntil = 0;
+let folderDropPromptVisible = false;
 let displayGeneration = 0;
 const busyStatusBadgeMs = 120_000;
+const autoWalkFrameMs = 50;
+const autoWalkSpeedPx = 2;
+const autoWalkEdgePaddingPx = 12;
+const autoWalkResumeAfterDragMs = 8_000;
+const folderDropPromptMessage = "我现在要吃掉他吗？";
 
 export function showDefaultPet(): void {
   updatePreferences({ openDefaultPetOnLaunch: true });
@@ -26,6 +37,7 @@ export function showDefaultPet(): void {
   }
 
   window.showInactive();
+  startDefaultPetAutoWalk();
 }
 
 export function hideDefaultPet(): void {
@@ -37,6 +49,7 @@ export function hideDefaultPet(): void {
   }
 
   info("pet.default", "hide requested", { windowId: defaultPetWindow.id, position: readWindowPosition(defaultPetWindow), petId: getAppStateSnapshot().preferences.defaultPetId });
+  stopDefaultPetAutoWalk();
   setDefaultPetPosition(readWindowPosition(defaultPetWindow));
   defaultPetWindow.hide();
 }
@@ -54,6 +67,8 @@ export function setDefaultPetPaused(nextPaused: boolean): void {
   }
 
   void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken());
+  if (paused) stopDefaultPetAutoWalk();
+  else startDefaultPetAutoWalk();
 }
 
 export function getDefaultPetPaused(): boolean {
@@ -93,6 +108,7 @@ export function applyExternalPetSay(message: string, reaction?: OpenPetsReaction
 
 export function destroyDefaultPet(): void {
   clearDefaultPetDisplayTimers();
+  stopDefaultPetAutoWalk();
 
   if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
     debug("pet.default", "destroy skipped", { reason: "no-window" });
@@ -140,6 +156,16 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     badge: statusBadge,
     onPositionChanged: setDefaultPetPosition,
     onHideRequested: hideDefaultPet,
+    onDragStarted: suspendDefaultPetAutoWalk,
+    onDragEnded: () => {
+      autoWalkSuspendedUntil = Date.now() + autoWalkResumeAfterDragMs;
+      startDefaultPetAutoWalk();
+    },
+    onFolderDragEntered: showFolderDropPrompt,
+    onFolderDragLeft: clearFolderDropPrompt,
+    onFolderDropped: (paths) => {
+      void handleFolderDroppedOnPet(paths);
+    },
     onBubbleDismissed: handleBubbleDismissed,
   }, getCurrentDismissToken());
   const windowId = defaultPetWindow.id;
@@ -147,6 +173,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
 
   defaultPetWindow.on("closed", () => {
     info("pet.default", "closed", { windowId });
+    stopDefaultPetAutoWalk();
     defaultPetWindow = null;
   });
 
@@ -231,6 +258,97 @@ function clearDefaultPetDisplayTimers(): void {
   statusBadge = null;
 }
 
+function showFolderDropPrompt(): void {
+  if (paused) {
+    return;
+  }
+
+  folderDropPromptVisible = true;
+  stopDefaultPetAutoWalk();
+  setTransientDisplay({ message: folderDropPromptMessage });
+}
+
+function clearFolderDropPrompt(): void {
+  if (!folderDropPromptVisible) {
+    return;
+  }
+
+  folderDropPromptVisible = false;
+  if (transientDisplay?.message !== folderDropPromptMessage) {
+    return;
+  }
+
+  if (transientDisplayTimeout) {
+    clearTimeout(transientDisplayTimeout);
+    transientDisplayTimeout = null;
+  }
+  if (transientAnimationTimeout) {
+    clearTimeout(transientAnimationTimeout);
+    transientAnimationTimeout = null;
+  }
+
+  transientDisplay = null;
+  refreshDefaultPetContent();
+  startDefaultPetAutoWalk();
+}
+
+async function handleFolderDroppedOnPet(paths: readonly string[]): Promise<void> {
+  clearFolderDropPrompt();
+  const folderPath = await findFirstDroppedDirectory(paths);
+
+  if (!folderPath) {
+    setTransientDisplay({ message: "请投喂一个文件夹。", reaction: "error" });
+    return;
+  }
+
+  try {
+    launchClaudeCodeTerminal(folderPath);
+    info("pet.default", "claude terminal launched from folder drop", { folderPath });
+    setTransientDisplay({ message: "我吃掉它啦，Claude Code 已启动。", reaction: "success" });
+  } catch (error: unknown) {
+    logError("pet.default", "claude terminal launch failed", error instanceof Error ? error : { error });
+    setTransientDisplay({ message: "启动 Claude Code 失败，请确认 claude 命令已安装。", reaction: "error" });
+  }
+}
+
+async function findFirstDroppedDirectory(paths: readonly string[]): Promise<string | null> {
+  for (const path of paths) {
+    if (typeof path !== "string" || path.length === 0 || path.length > 2048) {
+      continue;
+    }
+
+    try {
+      const pathStat = await stat(path);
+      if (pathStat.isDirectory()) {
+        return path;
+      }
+    } catch {
+    }
+  }
+
+  return null;
+}
+
+function launchClaudeCodeTerminal(folderPath: string): void {
+  if (process.platform !== "win32") {
+    const child = spawn("sh", ["-lc", "claude"], { cwd: folderPath, detached: true, stdio: "ignore" });
+    child.unref();
+    return;
+  }
+
+  const child = spawn("cmd.exe", ["/d", "/s", "/c", "start", "Claude Code", "cmd.exe", "/k", "claude"], {
+    cwd: folderPath,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+    shell: false,
+  });
+  child.once("error", (error) => {
+    logError("pet.default", "claude terminal process error", error);
+  });
+  child.unref();
+}
+
 function getCurrentDismissToken(): string | undefined {
   return transientDisplay?.dismissToken ?? (statusBadge ? String(displayGeneration) : undefined);
 }
@@ -248,6 +366,57 @@ function reclampDefaultPetWindow(): void {
   info("pet.default", "reclamp position", { windowId: defaultPetWindow.id, position: safePosition });
   defaultPetWindow.setPosition(safePosition.x, safePosition.y, false);
   setDefaultPetPosition(safePosition);
+}
+
+function startDefaultPetAutoWalk(): void {
+  if (autoWalkTimer || paused || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
+    return;
+  }
+
+  autoWalkTimer = setInterval(stepDefaultPetAutoWalk, autoWalkFrameMs);
+}
+
+function stopDefaultPetAutoWalk(): void {
+  if (!autoWalkTimer) {
+    return;
+  }
+
+  clearInterval(autoWalkTimer);
+  autoWalkTimer = null;
+}
+
+function suspendDefaultPetAutoWalk(): void {
+  autoWalkSuspendedUntil = Date.now() + autoWalkResumeAfterDragMs;
+  stopDefaultPetAutoWalk();
+}
+
+function stepDefaultPetAutoWalk(): void {
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
+    stopDefaultPetAutoWalk();
+    return;
+  }
+
+  if (paused || transientDisplay || statusBadge) {
+    return;
+  }
+
+  if (Date.now() < autoWalkSuspendedUntil) {
+    return;
+  }
+
+  const position = readWindowPosition(defaultPetWindow);
+  const { workArea } = screen.getPrimaryDisplay();
+  const minX = workArea.x + autoWalkEdgePaddingPx;
+  const maxX = workArea.x + workArea.width - defaultPetWindowSize.width - autoWalkEdgePaddingPx;
+  const nextX = Math.min(Math.max(position.x + autoWalkDirection * autoWalkSpeedPx, minX), maxX);
+
+  if (nextX <= minX) {
+    autoWalkDirection = 1;
+  } else if (nextX >= maxX) {
+    autoWalkDirection = -1;
+  }
+
+  defaultPetWindow.setPosition(nextX, position.y, false);
 }
 
 export function shouldOpenDefaultPetOnLaunch(): boolean {

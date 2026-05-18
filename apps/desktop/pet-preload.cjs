@@ -1,9 +1,10 @@
-const { ipcRenderer } = require("electron");
+const { ipcRenderer, webUtils } = require("electron");
 
 const allowedMotionStates = new Set(["idle", "run-left", "run-right"]);
 const allowedReactionStates = new Set(["idle", "running-right", "running-left", "waving", "jumping", "failed", "waiting", "running", "review"]);
 let lastInteractiveHit = null;
 let dragging = false;
+let folderDraggingOverPet = false;
 
 const dismissBubble = (event) => {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -83,6 +84,34 @@ const getInteractiveTarget = (event) => {
   return target && target.closest(".pet-shell, .bubble");
 };
 
+const isFolderDropTarget = (event) => {
+  const target = document.elementFromPoint(event.clientX, event.clientY);
+  return Boolean(target && target.closest(".pet-shell"));
+};
+
+const hasFileDrag = (event) => {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+};
+
+const getDroppedPaths = (event) => {
+  return Array.from(event.dataTransfer?.files ?? [])
+    .map((file) => {
+      if (webUtils && typeof webUtils.getPathForFile === "function") {
+        return webUtils.getPathForFile(file);
+      }
+
+      return typeof file.path === "string" ? file.path : "";
+    })
+    .filter((path) => typeof path === "string" && path.length > 0);
+};
+
+const setFolderDraggingOverPet = (next) => {
+  if (folderDraggingOverPet === next) return;
+  folderDraggingOverPet = next;
+  reportInteractiveHit(next || dragging || Boolean(lastInteractiveHit), next ? "folder-drag-enter" : "folder-drag-leave", true);
+  ipcRenderer.send(next ? "openpets:pet-folder-drag-enter" : "openpets:pet-folder-drag-leave");
+};
+
 const reportInteractiveHit = (interactive, source, force = false) => {
   if (!force && lastInteractiveHit === interactive) return;
   lastInteractiveHit = interactive;
@@ -109,8 +138,47 @@ ipcRenderer.on("openpets:pet-probe-hit-test", (_event, point) => {
 const installMouseInterop = () => {
   lastInteractiveHit = null;
   dragging = false;
+  folderDraggingOverPet = false;
 
   document.addEventListener("click", dismissBubble);
+
+  document.addEventListener("dragenter", (event) => {
+    if (!hasFileDrag(event) || !isFolderDropTarget(event)) return;
+    event.preventDefault();
+    setFolderDraggingOverPet(true);
+  });
+
+  document.addEventListener("dragover", (event) => {
+    if (!hasFileDrag(event) || !isFolderDropTarget(event)) {
+      setFolderDraggingOverPet(false);
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setFolderDraggingOverPet(true);
+  });
+
+  document.addEventListener("dragleave", (event) => {
+    if (isFolderDropTarget(event)) return;
+    setFolderDraggingOverPet(false);
+  });
+
+  document.addEventListener("drop", (event) => {
+    if (!hasFileDrag(event) || !isFolderDropTarget(event)) {
+      setFolderDraggingOverPet(false);
+      return;
+    }
+
+    event.preventDefault();
+    const paths = getDroppedPaths(event);
+    setFolderDraggingOverPet(false);
+    ipcRenderer.send("openpets:pet-folder-dropped", paths);
+  });
+
+  document.addEventListener("dragend", () => {
+    setFolderDraggingOverPet(false);
+  });
 
   document.addEventListener("mousemove", (event) => {
     updateInteractiveHit(event);
@@ -134,7 +202,7 @@ const installMouseInterop = () => {
   });
 
   document.addEventListener("mouseleave", () => {
-    if (!dragging) setInteractiveHit(false);
+    if (!dragging && !folderDraggingOverPet) setInteractiveHit(false);
   }, { passive: true });
 
   setInteractiveHit(false, "ready");
