@@ -11,6 +11,7 @@ import { getCatalogPageUiState, getCatalogSearchUiState, getCatalogUiState } fro
 import { getCodexPetsUiState, importCodexPet, readCodexPetSpritesheet } from "./codex-pets.js";
 import { refreshDefaultPetContent, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
 import { installPet, removePet, setDefaultInstalledPet } from "./pet-installation.js";
+import { getHtmlLanguage, getTaskWindowDefinitions, normalizeAppLanguage, type AppLanguage } from "./i18n.js";
 import { getInstalledPetDir } from "./pet-paths.js";
 import { defaultPetSprite, reactionAnimationMetadata, selectableAnimationMetadata, validateReactionAnimationOverrides } from "./reaction-animation-mapping.js";
 import { checkForGitHubReleaseUpdate, getUpdateStatus, openUpdateReleasePage } from "./update-checker.js";
@@ -22,29 +23,6 @@ interface TaskWindowDefinition {
   readonly heading: string;
   readonly description: string;
 }
-
-const taskWindowDefinitions: Record<TaskWindowKind, TaskWindowDefinition> = {
-  "pet-manager": {
-    title: "OpenPets — Pet Manager",
-    heading: "Manage Pets",
-    description: "Install pets from the validated catalog, switch your active companion, and manage local pets.",
-  },
-  "agent-setup": {
-    title: "OpenPets — Integrations",
-    heading: "Integrations",
-    description: "Connect OpenPets to coding tools with explicit confirmation.",
-  },
-  settings: {
-    title: "OpenPets — Settings",
-    heading: "Settings",
-    description: "Tune how OpenPets starts and resets your desktop companion.",
-  },
-  onboarding: {
-    title: "OpenPets — Welcome",
-    heading: "Welcome to OpenPets",
-    description: "Set up your pets and coding-agent integrations, or skip anything and come back later from the tray.",
-  },
-};
 
 const taskWindows = new Map<TaskWindowKind, BrowserWindow>();
 let internalUiHandlersInstalled = false;
@@ -125,13 +103,21 @@ export function installInternalUiHandlers(): void {
 
   ipcMain.handle("openpets:update-preferences", (event, patch: unknown) => {
     assertAllowedSender(event, ["settings"]);
-    const previousScale = getAppStateSnapshot().preferences.petScale;
-    const previousOverrides = JSON.stringify(getAppStateSnapshot().preferences.reactionAnimationOverrides ?? {});
+    const previousState = getAppStateSnapshot();
+    const previousScale = previousState.preferences.petScale;
+    const previousLanguage = previousState.preferences.language;
+    const previousOverrides = JSON.stringify(previousState.preferences.reactionAnimationOverrides ?? {});
     const state = updatePreferences(validatePreferencePatch(patch));
     const nextOverrides = JSON.stringify(state.preferences.reactionAnimationOverrides ?? {});
     if (state.preferences.petScale !== previousScale || nextOverrides !== previousOverrides) {
       refreshDefaultPetContent();
       refreshAgentPetContent();
+    }
+    if (state.preferences.language !== previousLanguage) {
+      setTimeout(() => {
+        refreshOpenTaskWindows();
+        void import("./tray.js").then(({ refreshTrayMenu }) => refreshTrayMenu());
+      }, 0);
     }
     return state;
   });
@@ -288,7 +274,8 @@ export function openTaskWindow(kind: TaskWindowKind): void {
     return;
   }
 
-  const definition = taskWindowDefinitions[kind];
+  const language = getAppStateSnapshot().preferences.language;
+  const definition = getTaskWindowDefinitions(language)[kind];
   const width = kind === "pet-manager" ? petManagerWindowWidth : kind === "agent-setup" ? agentSetupWindowWidth : taskWindowWidth;
   const height = kind === "pet-manager" ? petManagerWindowHeight : kind === "agent-setup" ? agentSetupWindowHeight : taskWindowHeight;
   const window = new BrowserWindow({
@@ -334,7 +321,7 @@ export function openTaskWindow(kind: TaskWindowKind): void {
     window.focus();
   });
 
-  window.loadURL(createTaskWindowDataUrl(kind, definition)).catch((error: unknown) => {
+  window.loadURL(createTaskWindowDataUrl(kind, definition, language)).catch((error: unknown) => {
     console.error(`Failed to load ${kind} placeholder URL.`, error);
   });
 
@@ -363,25 +350,41 @@ export function focusOpenTaskWindows(): void {
   }
 }
 
-function createTaskWindowDataUrl(kind: TaskWindowKind, definition: TaskWindowDefinition): string {
+function refreshOpenTaskWindows(): void {
+  const language = getAppStateSnapshot().preferences.language;
+  const definitions = getTaskWindowDefinitions(language);
+  for (const [kind, window] of taskWindows) {
+    if (window.isDestroyed()) {
+      continue;
+    }
+    const definition = definitions[kind];
+    window.setTitle(definition.title);
+    window.loadURL(createTaskWindowDataUrl(kind, definition, language)).catch((error: unknown) => {
+      console.error(`Failed to refresh ${kind} window language.`, error);
+    });
+  }
+}
+
+function createTaskWindowDataUrl(kind: TaskWindowKind, definition: TaskWindowDefinition, language: AppLanguage): string {
   if (kind === "pet-manager") {
-    return createDataUrl(createPetManagerHtml(definition));
+    return createDataUrl(createPetManagerHtml(definition, language));
   }
 
   if (kind === "settings") {
-    return createDataUrl(createSettingsHtml(definition));
+    return createDataUrl(createSettingsHtml(definition, language));
   }
 
   if (kind === "onboarding") {
-    return createDataUrl(createOnboardingHtml(definition));
+    return createDataUrl(createOnboardingHtml(definition, language));
   }
 
-  return createDataUrl(createAgentSetupHtml(definition));
+  return createDataUrl(createAgentSetupHtml(definition, language));
 }
 
-function createPlaceholderHtml(definition: TaskWindowDefinition): string {
+function createPlaceholderHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
+  const htmlLanguage = escapeHtml(getHtmlLanguage(language));
   const html = `<!doctype html>
-    <html lang="en">
+    <html lang="${htmlLanguage}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -410,12 +413,13 @@ function createPlaceholderHtml(definition: TaskWindowDefinition): string {
   return html;
 }
 
-function createPetManagerHtml(definition: TaskWindowDefinition): string {
+function createPetManagerHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
   const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const defaultThumbnailUrl = createAssetDataUrl("default-pet-thumbnail.png", "image/png");
+  const htmlLanguage = escapeHtml(getHtmlLanguage(language));
 
   return `<!doctype html>
-    <html lang="en">
+    <html lang="${htmlLanguage}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https://openpets.dev openpets-codex:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -424,7 +428,7 @@ function createPetManagerHtml(definition: TaskWindowDefinition): string {
         <title>${escapeHtml(definition.title)}</title>
         ${createTaskWindowStyles()}
       </head>
-      <body data-openpets-view="pet-manager" data-default-pet-thumbnail-src="${escapeHtml(defaultThumbnailUrl)}">
+      <body data-openpets-view="pet-manager" data-default-pet-thumbnail-src="${escapeHtml(defaultThumbnailUrl)}" data-openpets-language="${escapeHtml(language)}">
         <main class="pm-shell">
           <section class="pm-gallery-pane" aria-labelledby="pm-title">
             <img class="pm-logo" src="${escapeHtml(logoUrl)}" alt="OpenPets" draggable="false" />
@@ -459,12 +463,13 @@ function createPetManagerHtml(definition: TaskWindowDefinition): string {
     </html>`;
 }
 
-function createOnboardingHtml(definition: TaskWindowDefinition): string {
+function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
   const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const petsUrl = createAssetDataUrl("onboarding-pets.webp", "image/webp");
+  const htmlLanguage = escapeHtml(getHtmlLanguage(language));
 
   return `<!doctype html>
-    <html lang="en">
+    <html lang="${htmlLanguage}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -472,7 +477,7 @@ function createOnboardingHtml(definition: TaskWindowDefinition): string {
         <title>${escapeHtml(definition.title)}</title>
         ${createTaskWindowStyles()}
       </head>
-      <body data-openpets-view="onboarding">
+      <body data-openpets-view="onboarding" data-openpets-language="${escapeHtml(language)}">
         <main class="onboarding-main">
           <header class="onboarding-header" id="onboarding-header">
             <p class="eyebrow">OpenPets</p>
@@ -544,7 +549,7 @@ function createOnboardingHtml(definition: TaskWindowDefinition): string {
     </html>`;
 }
 
-function createAgentSetupHtml(definition: TaskWindowDefinition): string {
+function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
   const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const integrationIcons = {
     claude: createAssetDataUrl("integrations/claude.svg", "image/svg+xml"),
@@ -555,9 +560,10 @@ function createAgentSetupHtml(definition: TaskWindowDefinition): string {
     windsurf: createAssetDataUrl("integrations/windsurf.svg", "image/svg+xml"),
     zed: createAssetDataUrl("integrations/zed.svg", "image/svg+xml"),
   };
+  const htmlLanguage = escapeHtml(getHtmlLanguage(language));
 
   return `<!doctype html>
-    <html lang="en">
+    <html lang="${htmlLanguage}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -565,7 +571,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition): string {
         <title>${escapeHtml(definition.title)}</title>
         ${createTaskWindowStyles()}
       </head>
-      <body data-openpets-view="agent-setup">
+      <body data-openpets-view="agent-setup" data-openpets-language="${escapeHtml(language)}">
         <main class="agent-shell">
           <section id="integrations-view" class="integrations-view" aria-labelledby="agent-title">
             <header class="integrations-header">
@@ -811,10 +817,11 @@ pi remove npm:@open-pets/pi</pre></details>
       </body>
     </html>`;
 }
-function createSettingsHtml(definition: TaskWindowDefinition): string {
+function createSettingsHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
   const scaleOptionsHtml = petScaleOptions.map((option) => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join("");
+  const htmlLanguage = escapeHtml(getHtmlLanguage(language));
   return `<!doctype html>
-    <html lang="en">
+    <html lang="${htmlLanguage}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src openpets-pet-preview:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -822,13 +829,28 @@ function createSettingsHtml(definition: TaskWindowDefinition): string {
         <title>${escapeHtml(definition.title)}</title>
         ${createTaskWindowStyles()}
       </head>
-      <body data-openpets-view="settings">
+      <body data-openpets-view="settings" data-openpets-language="${escapeHtml(language)}">
         <main class="settings-shell">
           <header class="settings-header">
             <p class="eyebrow">OpenPets</p>
             <h1>${escapeHtml(definition.heading)}</h1>
             <p class="lede">${escapeHtml(definition.description)}</p>
           </header>
+          <section class="settings-panel" aria-labelledby="settings-language-title">
+            <div class="settings-section-heading">
+              <span>
+                <small>Language</small>
+                <h2 id="settings-language-title">App language</h2>
+              </span>
+            </div>
+            <label class="setting-row">
+              <span>
+                <strong>Display language</strong>
+                <small>Choose the language used by the desktop UI and tray menu.</small>
+              </span>
+              <select id="app-language" class="settings-select" aria-label="App language"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+            </label>
+          </section>
           <section class="settings-panel" aria-labelledby="settings-general-title">
             <div class="settings-section-heading">
               <span>
@@ -1318,12 +1340,18 @@ async function getDefaultPetPreviewSpriteInfo(): Promise<{ readonly path: string
   return { path: builtInPath, version: `builtin-${Math.round(fallback.mtimeMs)}-${fallback.size}` };
 }
 
-function validatePreferencePatch(value: unknown): { openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
+function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
   if (!isRecord(value)) {
     throw new Error("Invalid preferences patch.");
   }
 
-  const patch: { openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
+  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
+
+  if ("language" in value) {
+    const language = normalizeAppLanguage(value.language);
+    if (language !== value.language) throw new Error("Invalid language value.");
+    patch.language = language;
+  }
 
   if ("openDefaultPetOnLaunch" in value) {
     if (typeof value.openDefaultPetOnLaunch !== "boolean") throw new Error("Invalid open-on-launch value.");

@@ -6,6 +6,7 @@ import { app } from "electron";
 import { defaultPetScale, markOnboardingCompleted, normalizeOnboardingCompleted, normalizePetScale, petScaleOptions, type PetScaleValue } from "./app-state-core.js";
 import { builtInPet } from "./built-in-pet.js";
 import type { Point } from "./display.js";
+import { normalizeAppLanguage, type AppLanguage } from "./i18n.js";
 import { assertSafePetId, getInstalledPetDir } from "./pet-paths.js";
 import { normalizeReactionAnimationOverrides, type ReactionAnimationOverrides } from "./reaction-animation-mapping.js";
 
@@ -32,6 +33,7 @@ export interface InstalledPetState {
 export interface OpenPetsStateV1 {
   readonly version: 1;
   readonly preferences: {
+    readonly language: AppLanguage;
     readonly defaultPetId: string;
     readonly openDefaultPetOnLaunch: boolean;
     readonly speechBubblesEnabled: boolean;
@@ -287,6 +289,7 @@ function normalizePreferences(value: Partial<OpenPetsStateV1["preferences"]>): O
   const defaultState = createDefaultState();
 
   return {
+    language: normalizeAppLanguage(value.language),
     defaultPetId: typeof value.defaultPetId === "string" ? value.defaultPetId : builtInPet.id,
     openDefaultPetOnLaunch: typeof value.openDefaultPetOnLaunch === "boolean"
       ? value.openDefaultPetOnLaunch
@@ -356,6 +359,7 @@ function createDefaultState(): OpenPetsStateV1 {
   return {
     version: 1,
     preferences: {
+      language: "en",
       defaultPetId: builtInPet.id,
       openDefaultPetOnLaunch: true,
       speechBubblesEnabled: true,

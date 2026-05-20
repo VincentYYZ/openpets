@@ -3,6 +3,7 @@ import { Menu, Tray, type MenuItemConstructorOptions } from "electron";
 import { getAppStateSnapshot, isOnboardingCompleted } from "./app-state.js";
 import { createTrayIcon } from "./assets.js";
 import { hideDefaultPet, isDefaultPetVisible, setDefaultPetPaused, showDefaultPet } from "./default-pet-controller.js";
+import { getTrayCopy } from "./i18n.js";
 import { quitOpenPets } from "./lifecycle.js";
 import { info, openLogsFolder } from "./logger.js";
 import { shellState, togglePaused } from "./state.js";
@@ -17,7 +18,6 @@ export function createAppTray(): Tray {
   }
 
   tray = new Tray(createTrayIcon());
-  tray.setToolTip("OpenPets");
   refreshTrayMenu();
   info("tray", "created");
   console.log("OpenPets tray created.");
@@ -31,14 +31,17 @@ export function refreshTrayMenu(): void {
   }
 
   const state = getAppStateSnapshot();
+  const copy = getTrayCopy(state.preferences.language);
   const defaultPet = state.pets.installed.find((pet) => pet.id === state.preferences.defaultPetId && !pet.broken) ?? state.pets.installed[0];
-  const defaultPetName = defaultPet?.displayName ?? "Built-in Pet";
+  const defaultPetName = defaultPet?.displayName ?? copy.builtInPetName;
+
+  tray.setToolTip(copy.toolTip);
 
   const continueSetupItems = isOnboardingCompleted()
     ? []
     : [
       {
-        label: "Continue Setup...",
+        label: copy.continueSetup,
         click: () => openTaskWindow("onboarding"),
       },
       { type: "separator" as const },
@@ -46,18 +49,18 @@ export function refreshTrayMenu(): void {
 
   const menu = Menu.buildFromTemplate([
     {
-      label: "OpenPets",
+      label: copy.toolTip,
       enabled: false,
     },
     ...createUpdateMenuItems(),
     { type: "separator" },
     ...continueSetupItems,
     {
-      label: `Default Pet: ${defaultPetName}`,
+      label: copy.defaultPet(defaultPetName),
       click: () => openTaskWindow("pet-manager"),
     },
     {
-      label: isDefaultPetVisible() ? "Hide Default Pet" : "Show Default Pet",
+      label: isDefaultPetVisible() ? copy.hideDefaultPet : copy.showDefaultPet,
       click: () => {
         if (isDefaultPetVisible()) {
           hideDefaultPet();
@@ -69,7 +72,7 @@ export function refreshTrayMenu(): void {
       },
     },
     {
-      label: shellState.paused ? "Resume All Pets" : "Pause All Pets",
+      label: shellState.paused ? copy.resumeAllPets : copy.pauseAllPets,
       click: () => {
         const paused = togglePaused();
         setDefaultPetPaused(paused);
@@ -80,24 +83,24 @@ export function refreshTrayMenu(): void {
     },
     { type: "separator" },
     {
-      label: "Manage Pets...",
+      label: copy.managePets,
       click: () => openTaskWindow("pet-manager"),
     },
     {
-      label: "Integrations...",
+      label: copy.integrations,
       click: () => openTaskWindow("agent-setup"),
     },
     {
-      label: "Settings...",
+      label: copy.settings,
       click: () => openTaskWindow("settings"),
     },
     {
-      label: "Open Logs Folder...",
+      label: copy.openLogsFolder,
       click: () => { void openLogsFolder(); },
     },
     { type: "separator" },
     {
-      label: "Quit OpenPets",
+      label: copy.quitOpenPets,
       click: () => quitOpenPets(),
     },
   ]);
@@ -106,11 +109,13 @@ export function refreshTrayMenu(): void {
 }
 
 function createUpdateMenuItems(): MenuItemConstructorOptions[] {
+  const state = getAppStateSnapshot();
+  const copy = getTrayCopy(state.preferences.language);
   const status = getUpdateStatus();
   if (status.state !== "available") return [];
   return [
     {
-      label: `Update available: ${status.latestVersion ?? "latest"}...`,
+      label: copy.updateAvailable(status.latestVersion ?? "latest"),
       click: () => { void openUpdateReleasePage(); },
     },
   ];

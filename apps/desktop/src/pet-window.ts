@@ -17,6 +17,8 @@ export interface DefaultPetWindowOptions {
   readonly paused: boolean;
   readonly display: PetTransientDisplay | null;
   readonly badge: PetStatusBadgeReaction | null;
+  readonly motionState?: PetMotionState;
+  readonly reactionState?: UniversalSpriteState;
   readonly onPositionChanged: (position: Point) => void;
   readonly onHideRequested: () => void;
   readonly onDragStarted?: () => void;
@@ -50,11 +52,14 @@ export type PetStatusBadgeReaction = Exclude<OpenPetsReaction, "idle">;
 interface PetContentRender {
   readonly html: string;
   readonly bodyHtml: string;
+  readonly motionState: PetMotionState;
   readonly reactionState: UniversalSpriteState;
   readonly cacheKey: string;
 }
 
 const petWindowRenderCache = new WeakMap<BrowserWindow, string>();
+const petWindowMotionStateCache = new WeakMap<BrowserWindow, PetMotionState>();
+const petWindowReactionStateCache = new WeakMap<BrowserWindow, UniversalSpriteState>();
 
 const windowLoadChains = new WeakMap<BrowserWindow, Promise<void>>();
 const windowLoadSequences = new WeakMap<BrowserWindow, number>();
@@ -63,7 +68,6 @@ export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismiss
   const window = createBasePetWindow("OpenPets — Default Pet", options.position);
   info("pet.window", "default window create", { windowId: window.id, position: options.position, paused: options.paused, hasDisplay: Boolean(options.display), badge: options.badge });
   installMousePassthroughAndDrag(window, options.onBubbleDismissed, options.onDragStarted, options.onDragEnded, options.onFolderDragEntered, options.onFolderDragLeft, options.onFolderDropped);
-  installMotionStatePublisher(window);
   installPetContextMenu(window, { label: "Hide pet", click: options.onHideRequested });
 
   const savePosition = debounce(() => {
@@ -81,7 +85,7 @@ export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismiss
     options.onPositionChanged(readWindowPosition(window));
   });
 
-  void loadDefaultPetContent(window, options.paused, options.display, options.badge, dismissToken);
+  void loadDefaultPetContent(window, options.paused, options.display, options.badge, dismissToken, options.motionState ?? "idle", options.reactionState);
 
   return window;
 }
@@ -398,13 +402,15 @@ function applyPetAlwaysOnTop(window: BrowserWindow): void {
   }
 }
 
-export async function loadDefaultPetContent(window: BrowserWindow, paused: boolean, display: PetTransientDisplay | null = null, badge: PetStatusBadgeReaction | null = null, dismissToken?: string): Promise<void> {
+export async function loadDefaultPetContent(window: BrowserWindow, paused: boolean, display: PetTransientDisplay | null = null, badge: PetStatusBadgeReaction | null = null, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<void> {
   const sequence = allocateWindowLoadSequence(window);
   debug("pet.window", "default content render begin", { windowId: window.id, sequence, paused, hasDisplay: Boolean(display), reaction: display?.reaction, hasMessage: Boolean(display?.message), badge, defaultPetId: getAppStateSnapshot().preferences.defaultPetId });
-  const render = await createDefaultPetRender(paused, display, badge, dismissToken);
+  const render = await createDefaultPetRender(paused, display, badge, dismissToken, motionState, reactionStateOverride);
   if (tryUpdateLoadedPetContent(window, render, "default", sequence)) return;
   await loadPetHtmlFile(window, render.html, "default", sequence).then(() => {
     petWindowRenderCache.set(window, render.cacheKey);
+    petWindowMotionStateCache.set(window, render.motionState);
+    petWindowReactionStateCache.set(window, render.reactionState);
   }).catch((error: unknown) => {
     logError("pet.window", "default content load failed", error instanceof Error ? error : { error });
     console.error("Failed to load default pet URL.", error);
@@ -463,7 +469,16 @@ export function clearTransientReaction(display: PetTransientDisplay): PetTransie
 
 export function setPetReactionState(window: BrowserWindow, state: UniversalSpriteState): void {
   if (window.isDestroyed()) return;
+  if (petWindowReactionStateCache.get(window) === state) return;
+  petWindowReactionStateCache.set(window, state);
   window.webContents.send("openpets:pet-reaction-state", state);
+}
+
+export function setPetMotionState(window: BrowserWindow, state: PetMotionState): void {
+  if (window.isDestroyed()) return;
+  if (petWindowMotionStateCache.get(window) === state) return;
+  petWindowMotionStateCache.set(window, state);
+  window.webContents.send("openpets:pet-motion", state);
 }
 
 function tryUpdateLoadedPetContent(window: BrowserWindow, render: PetContentRender, name: string, sequence: number): boolean {
@@ -471,8 +486,11 @@ function tryUpdateLoadedPetContent(window: BrowserWindow, render: PetContentRend
   if (petWindowRenderCache.get(window) !== render.cacheKey) return false;
   const url = window.webContents.getURL();
   if (!isAllowedPetDocumentUrl(url)) return false;
-  debug("pet.window", "content update in place", { windowId: window.id, name, sequence, reactionState: render.reactionState });
-  window.webContents.send("openpets:pet-content-state", { bodyHtml: render.bodyHtml, reactionState: render.reactionState });
+  const motionState = name === "default" ? render.motionState : petWindowMotionStateCache.get(window) ?? render.motionState;
+  debug("pet.window", "content update in place", { windowId: window.id, name, sequence, motionState, reactionState: render.reactionState });
+  petWindowMotionStateCache.set(window, motionState);
+  petWindowReactionStateCache.set(window, render.reactionState);
+  window.webContents.send("openpets:pet-content-state", { bodyHtml: render.bodyHtml, motionState, reactionState: render.reactionState });
   return true;
 }
 
@@ -485,24 +503,25 @@ export function readWindowPosition(window: BrowserWindow): Point {
   return clampToPrimaryWorkArea({ x, y }, defaultPetWindowSize);
 }
 
-async function createDefaultPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string): Promise<PetContentRender> {
-  const installedPetRender = await tryCreateInstalledPetRender(paused, display, badge, dismissToken);
+async function createDefaultPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender> {
+  const installedPetRender = await tryCreateInstalledPetRender(paused, display, badge, dismissToken, motionState, reactionStateOverride);
   if (installedPetRender) {
     return installedPetRender;
   }
 
   const spriteUrl = pathToFileURL(join(app.getAppPath(), "assets", defaultPetSprite.fileName)).toString();
   const bodyHtml = createPetBodyMarkup("OpenPets default pet", createBubbleMarkup(display, paused, badge, dismissToken), `<div class="sprite" role="img" aria-label="Claude animated default pet"></div>`);
-  const reactionState = getReactionSpriteState(display?.reaction);
+  const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
   const scale = getAppStateSnapshot().preferences.petScale as PetScaleValue;
 
   return {
     cacheKey: `default:builtin:${paused}:${scale}`,
     bodyHtml,
+    motionState,
     reactionState,
     html: `<!doctype html>
-    <html lang="en" data-reaction-state="${reactionState}" data-motion-state="idle">
+    <html lang="en" data-reaction-state="${reactionState}" data-motion-state="${motionState}">
       <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -540,7 +559,7 @@ async function createDefaultPetRender(paused: boolean, display: PetTransientDisp
   };
 }
 
-async function tryCreateInstalledPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string): Promise<PetContentRender | null> {
+async function tryCreateInstalledPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender | null> {
   const state = getAppStateSnapshot();
   const selected = state.pets.installed.find((pet) => pet.id === state.preferences.defaultPetId);
 
@@ -549,7 +568,7 @@ async function tryCreateInstalledPetRender(paused: boolean, display: PetTransien
   }
 
   try {
-    return await createInstalledPetRender(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge, `default:${selected.id}`, dismissToken);
+    return await createInstalledPetRender(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge, `default:${selected.id}`, dismissToken, motionState, reactionStateOverride);
   } catch (error) {
     console.error(`Failed to render installed default pet ${selected.id}; falling back to built-in pet.`, error);
     try {
@@ -561,7 +580,7 @@ async function tryCreateInstalledPetRender(paused: boolean, display: PetTransien
   }
 }
 
-async function createInstalledPetRender(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null, cachePrefix: string, dismissToken?: string): Promise<PetContentRender> {
+async function createInstalledPetRender(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null, cachePrefix: string, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender> {
   const spritesheetPath = join(getInstalledPetDir(petId), "spritesheet.webp");
   const spritesheet = await stat(spritesheetPath);
   if (!spritesheet.isFile() || spritesheet.size <= 0 || spritesheet.size > 100 * 1024 * 1024) {
@@ -570,15 +589,16 @@ async function createInstalledPetRender(petId: string, displayName: string, paus
 
   const imageUrl = pathToFileURL(spritesheetPath).toString();
   const bodyHtml = createPetBodyMarkup(escapeHtml(displayName), createBubbleMarkup(display, paused, badge, dismissToken), `<div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}"><div class="installed-sprite"></div></div>`);
-  const reactionState = getReactionSpriteState(display?.reaction);
+  const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
 
   return {
     cacheKey: `${cachePrefix}:${paused}:${scale}:${spritesheet.mtimeMs}:${spritesheet.size}`,
     bodyHtml,
+    motionState,
     reactionState,
     html: `<!doctype html>
-      <html lang="en" data-reaction-state="${reactionState}" data-motion-state="idle">
+      <html lang="en" data-reaction-state="${reactionState}" data-motion-state="${motionState}">
         <head>
           <meta charset="utf-8" />
           <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
@@ -753,7 +773,7 @@ function installMotionStatePublisher(window: BrowserWindow): void {
   const sendMotionState = (state: PetMotionState): void => {
     if (window.isDestroyed() || lastSent === state) return;
     lastSent = state;
-    window.webContents.send("openpets:pet-motion", state);
+    setPetMotionState(window, state);
   };
 
   const scheduleIdle = (): void => {
@@ -780,7 +800,7 @@ function installMotionStatePublisher(window: BrowserWindow): void {
   window.on("moved", handleMove);
   window.webContents.on("did-finish-load", () => {
     lastSent = "idle";
-    window.webContents.send("openpets:pet-motion", "idle");
+    setPetMotionState(window, "idle");
   });
   window.on("closed", () => {
     if (idleTimer) clearTimeout(idleTimer);

@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 
 import { getAppStateSnapshot, getDefaultPetPosition, resetDefaultPetPosition, setDefaultPetPosition, updatePreferences } from "./app-state.js";
+import { resolvePetAnimationState, type ResolvedPetAnimationState } from "./pet-animation-resolver.js";
+import { createInitialPetBehaviorState, reducePetBehavior, type PetBehaviorCommand, type PetBehaviorEvent } from "./pet-behavior-machine.js";
 import { defaultPetWindowSize, getDefaultPetInitialPosition } from "./display.js";
 import { debug, error as logError, info } from "./logger.js";
 import { transientDisplayMs, type OpenPetsReaction } from "./local-ipc-protocol.js";
-import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetReactionState, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
+import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetMotionState, setPetReactionState, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
 
 let defaultPetWindow: BrowserWindow | null = null;
 let paused = false;
@@ -16,9 +18,12 @@ let transientDisplayTimeout: NodeJS.Timeout | null = null;
 let transientAnimationTimeout: NodeJS.Timeout | null = null;
 let statusBadgeTimeout: NodeJS.Timeout | null = null;
 let autoWalkTimer: NodeJS.Timeout | null = null;
-let autoWalkDirection: -1 | 1 = Math.random() < 0.5 ? -1 : 1;
-let autoWalkSuspendedUntil = 0;
-let folderDropPromptVisible = false;
+let behaviorState = createInitialPetBehaviorState(Math.random() < 0.5 ? -1 : 1);
+let currentAnimationState: ResolvedPetAnimationState = {
+  animationPriority: "motion",
+  motionState: "idle",
+  reactionState: "idle",
+};
 let displayGeneration = 0;
 const busyStatusBadgeMs = 120_000;
 const autoWalkFrameMs = 50;
@@ -60,13 +65,14 @@ export function isDefaultPetVisible(): boolean {
 
 export function setDefaultPetPaused(nextPaused: boolean): void {
   paused = nextPaused;
+  currentAnimationState = resolveCurrentAnimationState();
   info("pet.default", "pause changed", { paused });
 
   if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
     return;
   }
 
-  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken());
+  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken(), currentAnimationState.motionState, currentAnimationState.reactionState);
   if (paused) stopDefaultPetAutoWalk();
   else startDefaultPetAutoWalk();
 }
@@ -81,8 +87,9 @@ export function refreshDefaultPetContent(): void {
     return;
   }
 
+  currentAnimationState = resolveCurrentAnimationState();
   debug("pet.default", "refresh content", { windowId: defaultPetWindow.id, paused, hasDisplay: Boolean(transientDisplay), badge: statusBadge, petId: getAppStateSnapshot().preferences.defaultPetId });
-  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken());
+  void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken(), currentAnimationState.motionState, currentAnimationState.reactionState);
 }
 
 export function applyExternalPetReaction(reaction: OpenPetsReaction): { readonly shown: boolean; readonly reason?: string } {
@@ -137,8 +144,9 @@ function handleBubbleDismissed(dismissToken: string): void {
     return;
   }
   clearDefaultPetDisplayTimers();
+  currentAnimationState = resolveCurrentAnimationState();
   if (defaultPetWindow && !defaultPetWindow.isDestroyed()) {
-    void loadDefaultPetContent(defaultPetWindow, paused, null, null);
+    void loadDefaultPetContent(defaultPetWindow, paused, null, null, undefined, currentAnimationState.motionState, currentAnimationState.reactionState);
   }
 }
 
@@ -147,6 +155,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     return defaultPetWindow;
   }
 
+  currentAnimationState = resolveCurrentAnimationState();
   const position = getSafeDefaultPetPosition(getDefaultPetPosition());
 
   defaultPetWindow = createDefaultPetWindow({
@@ -154,15 +163,14 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     paused,
     display: transientDisplay,
     badge: statusBadge,
+    motionState: currentAnimationState.motionState,
+    reactionState: currentAnimationState.reactionState,
     onPositionChanged: setDefaultPetPosition,
     onHideRequested: hideDefaultPet,
-    onDragStarted: suspendDefaultPetAutoWalk,
-    onDragEnded: () => {
-      autoWalkSuspendedUntil = Date.now() + autoWalkResumeAfterDragMs;
-      startDefaultPetAutoWalk();
-    },
-    onFolderDragEntered: showFolderDropPrompt,
-    onFolderDragLeft: clearFolderDropPrompt,
+    onDragStarted: handlePetDragStarted,
+    onDragEnded: handlePetDragEnded,
+    onFolderDragEntered: handleFolderDragEntered,
+    onFolderDragLeft: handleFolderDragLeft,
     onFolderDropped: (paths) => {
       void handleFolderDroppedOnPet(paths);
     },
@@ -184,6 +192,7 @@ function setTransientDisplay(display: PetTransientDisplay): void {
   debug("pet.default", "transient display set", { reaction: display.reaction, hasMessage: Boolean(display.message), hasReactionMessage: Boolean(display.reactionMessage) });
   displayGeneration++;
   transientDisplay = mergePetTransientDisplay(transientDisplay, { ...display, dismissToken: String(displayGeneration) });
+  currentAnimationState = resolveCurrentAnimationState();
   if (display.reaction) setStatusBadge(display.reaction);
 
   if (transientDisplayTimeout) {
@@ -200,13 +209,15 @@ function setTransientDisplay(display: PetTransientDisplay): void {
     transientAnimationTimeout = setTimeout(() => {
       if (!transientDisplay) return;
       transientDisplay = clearTransientReaction(transientDisplay);
+      currentAnimationState = resolveCurrentAnimationState();
       transientAnimationTimeout = null;
-      if (defaultPetWindow && !defaultPetWindow.isDestroyed()) setPetReactionState(defaultPetWindow, "idle");
+      syncDefaultPetAnimationState();
     }, animationMs);
   }
 
   transientDisplayTimeout = setTimeout(() => {
     transientDisplay = null;
+    currentAnimationState = resolveCurrentAnimationState();
     transientDisplayTimeout = null;
     if (transientAnimationTimeout) {
       clearTimeout(transientAnimationTimeout);
@@ -232,6 +243,7 @@ function setStatusBadge(reaction: OpenPetsReaction): void {
   }
 
   statusBadge = reaction;
+  currentAnimationState = resolveCurrentAnimationState();
   debug("pet.default", "status badge set", { reaction, durationMs: isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs });
   if (statusBadgeTimeout) clearTimeout(statusBadgeTimeout);
   statusBadgeTimeout = setTimeout(() => {
@@ -243,6 +255,7 @@ function setStatusBadge(reaction: OpenPetsReaction): void {
 function clearStatusBadge(): void {
   if (statusBadge) debug("pet.default", "status badge cleared", { reaction: statusBadge });
   statusBadge = null;
+  currentAnimationState = resolveCurrentAnimationState();
   if (statusBadgeTimeout) clearTimeout(statusBadgeTimeout);
   statusBadgeTimeout = null;
 }
@@ -256,6 +269,59 @@ function clearDefaultPetDisplayTimers(): void {
   statusBadgeTimeout = null;
   transientDisplay = null;
   statusBadge = null;
+  currentAnimationState = resolveCurrentAnimationState();
+}
+
+function dispatchPetBehaviorEvent(event: PetBehaviorEvent): void {
+  const transition = reducePetBehavior(behaviorState, event);
+  behaviorState = transition.state;
+  currentAnimationState = resolveCurrentAnimationState();
+  executePetBehaviorCommands(transition.commands);
+  syncDefaultPetAnimationState();
+}
+
+function executePetBehaviorCommands(commands: readonly PetBehaviorCommand[]): void {
+  for (const command of commands) {
+    switch (command.type) {
+      case "show-folder-drop-prompt":
+        showFolderDropPrompt();
+        break;
+      case "clear-folder-drop-prompt":
+        clearFolderDropPrompt();
+        break;
+      case "move-window-x": {
+        if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
+          break;
+        }
+
+        const position = readWindowPosition(defaultPetWindow);
+        defaultPetWindow.setPosition(command.x, position.y, false);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+function handlePetDragStarted(): void {
+  dispatchPetBehaviorEvent({ type: "drag-start", now: Date.now() });
+  stopDefaultPetAutoWalk();
+}
+
+function handlePetDragEnded(): void {
+  dispatchPetBehaviorEvent({ type: "drag-end", now: Date.now(), resumeAfterMs: autoWalkResumeAfterDragMs });
+  startDefaultPetAutoWalk();
+}
+
+function handleFolderDragEntered(): void {
+  dispatchPetBehaviorEvent({ type: "folder-drag-enter" });
+  stopDefaultPetAutoWalk();
+}
+
+function handleFolderDragLeft(): void {
+  dispatchPetBehaviorEvent({ type: "folder-drag-leave" });
+  startDefaultPetAutoWalk();
 }
 
 function showFolderDropPrompt(): void {
@@ -263,17 +329,10 @@ function showFolderDropPrompt(): void {
     return;
   }
 
-  folderDropPromptVisible = true;
-  stopDefaultPetAutoWalk();
   setTransientDisplay({ message: folderDropPromptMessage });
 }
 
 function clearFolderDropPrompt(): void {
-  if (!folderDropPromptVisible) {
-    return;
-  }
-
-  folderDropPromptVisible = false;
   if (transientDisplay?.message !== folderDropPromptMessage) {
     return;
   }
@@ -293,7 +352,8 @@ function clearFolderDropPrompt(): void {
 }
 
 async function handleFolderDroppedOnPet(paths: readonly string[]): Promise<void> {
-  clearFolderDropPrompt();
+  dispatchPetBehaviorEvent({ type: "folder-drop" });
+  startDefaultPetAutoWalk();
   const folderPath = await findFirstDroppedDirectory(paths);
 
   if (!folderPath) {
@@ -353,6 +413,25 @@ function getCurrentDismissToken(): string | undefined {
   return transientDisplay?.dismissToken ?? (statusBadge ? String(displayGeneration) : undefined);
 }
 
+function resolveCurrentAnimationState(): ResolvedPetAnimationState {
+  return resolvePetAnimationState({
+    paused,
+    behaviorMode: behaviorState.mode,
+    displayReaction: transientDisplay?.reaction,
+    statusBadge,
+    reactionAnimationOverrides: getAppStateSnapshot().preferences.reactionAnimationOverrides,
+  });
+}
+
+function syncDefaultPetAnimationState(): void {
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
+    return;
+  }
+
+  setPetMotionState(defaultPetWindow, currentAnimationState.motionState);
+  setPetReactionState(defaultPetWindow, currentAnimationState.reactionState);
+}
+
 function isBusyStatusBadgeReaction(reaction: OpenPetsReaction): boolean {
   return reaction === "thinking" || reaction === "working" || reaction === "editing" || reaction === "running" || reaction === "testing" || reaction === "waiting";
 }
@@ -385,11 +464,6 @@ function stopDefaultPetAutoWalk(): void {
   autoWalkTimer = null;
 }
 
-function suspendDefaultPetAutoWalk(): void {
-  autoWalkSuspendedUntil = Date.now() + autoWalkResumeAfterDragMs;
-  stopDefaultPetAutoWalk();
-}
-
 function stepDefaultPetAutoWalk(): void {
   if (!defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
     stopDefaultPetAutoWalk();
@@ -400,23 +474,16 @@ function stepDefaultPetAutoWalk(): void {
     return;
   }
 
-  if (Date.now() < autoWalkSuspendedUntil) {
-    return;
-  }
-
   const position = readWindowPosition(defaultPetWindow);
   const { workArea } = screen.getPrimaryDisplay();
-  const minX = workArea.x + autoWalkEdgePaddingPx;
-  const maxX = workArea.x + workArea.width - defaultPetWindowSize.width - autoWalkEdgePaddingPx;
-  const nextX = Math.min(Math.max(position.x + autoWalkDirection * autoWalkSpeedPx, minX), maxX);
-
-  if (nextX <= minX) {
-    autoWalkDirection = 1;
-  } else if (nextX >= maxX) {
-    autoWalkDirection = -1;
-  }
-
-  defaultPetWindow.setPosition(nextX, position.y, false);
+  dispatchPetBehaviorEvent({
+    type: "tick",
+    now: Date.now(),
+    positionX: position.x,
+    minX: workArea.x + autoWalkEdgePaddingPx,
+    maxX: workArea.x + workArea.width - defaultPetWindowSize.width - autoWalkEdgePaddingPx,
+    speedPx: autoWalkSpeedPx,
+  });
 }
 
 export function shouldOpenDefaultPetOnLaunch(): boolean {

@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { resolve } from "node:path";
 
 import { initializeAppState, isOnboardingCompleted, releaseStartupInstallLock } from "./app-state.js";
 import { installDefaultPetDisplayHandlers, shouldOpenDefaultPetOnLaunch, showDefaultPet } from "./default-pet-controller.js";
@@ -22,6 +23,10 @@ app.commandLine.appendSwitch("password-store", "basic");
 // backend at launch.
 if (process.platform === "linux" && !app.commandLine.hasSwitch("ozone-platform")) {
   app.commandLine.appendSwitch("ozone-platform", "x11");
+}
+
+if (typeof process.env.OPENPETS_USER_DATA === "string" && process.env.OPENPETS_USER_DATA.trim().length > 0) {
+  app.setPath("userData", resolve(process.env.OPENPETS_USER_DATA));
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();

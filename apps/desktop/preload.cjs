@@ -43,6 +43,339 @@ let petGalleryInstance = 0;
 let reactionAnimationRenderSequence = 0;
 let reactionAnimationSaveChain = Promise.resolve();
 const remoteCatalogFilters = new Set(["original", "western", "asian"]);
+const zhCnExactText = Object.freeze({
+  "OpenPets state is unavailable.": "OpenPets 状态不可用。",
+  "Onboarding state is unavailable.": "引导状态不可用。",
+  "Install a Pet": "安装宠物",
+  "Pick a companion for your terminal.": "为你的终端挑选一个伙伴。",
+  "Loading…": "加载中…",
+  "Search pets…": "搜索宠物…",
+  "Pet filters": "宠物筛选",
+  "All": "全部",
+  "Installed": "已安装",
+  "Originals": "官方原创",
+  "Western": "西方",
+  "Asian": "亚洲",
+  "Pets": "宠物",
+  "Unavailable": "不可用",
+  "Catalog unavailable": "目录不可用",
+  "Load more pets": "加载更多宠物",
+  "Broken": "已损坏",
+  "Default": "默认",
+  "Protected": "受保护",
+  "Remove": "移除",
+  "Import": "导入",
+  "Install": "安装",
+  "Preview": "预览",
+  "Thinking": "思考",
+  "Happy": "开心",
+  "Wave": "挥手",
+  "Set default": "设为默认",
+  "A friendly coding companion.": "一个友好的编码伙伴。",
+  "A local Codex companion.": "一个本地 Codex 伙伴。",
+  "No installed pets match your search.": "没有已安装宠物匹配你的搜索。",
+  "No Codex pets match your search.": "没有 Codex 宠物匹配你的搜索。",
+  "No OpenPets originals match your search.": "没有 OpenPets 原创宠物匹配你的搜索。",
+  "No Western pets match your search.": "没有西方风格宠物匹配你的搜索。",
+  "No Asian pets match your search.": "没有亚洲风格宠物匹配你的搜索。",
+  "No pets match your search.": "没有宠物匹配你的搜索。",
+  "This installed pet is broken and cannot be selected as default.": "这个已安装宠物已损坏，不能设为默认。",
+  "Default built-in pet. Protected from removal.": "当前是默认内置宠物，受保护不可移除。",
+  "Default pet.": "当前默认宠物。",
+  "Imported from your local Codex pets and ready to become your default pet.": "已从本地 Codex 宠物导入，可设为默认宠物。",
+  "Installed and ready to become your default pet. Also found in ~/.codex/pets.": "已安装，可设为默认宠物。同时在 ~/.codex/pets 中找到该宠物。",
+  "Installed and ready to become your default pet.": "已安装，可设为默认宠物。",
+  "Available to import from ~/.codex/pets.": "可从 ~/.codex/pets 导入。",
+  "Available in the catalog and also found in ~/.codex/pets. Import uses the local Codex copy.": "目录中可用，并且也在 ~/.codex/pets 中找到。导入时会使用本地 Codex 副本。",
+  "Available to install from the catalog.": "可从目录中安装。",
+  "Setting…": "设置中…",
+  "Importing…": "导入中…",
+  "Installing…": "安装中…",
+  "Removing…": "移除中…",
+  "Language": "语言",
+  "App language": "应用语言",
+  "Display language": "显示语言",
+  "Choose the language used by the desktop UI and tray menu.": "选择桌面界面和托盘菜单使用的语言。",
+  "General": "常规",
+  "Startup and companion behavior": "启动与伙伴行为",
+  "Open default pet on app launch": "启动应用时打开默认宠物",
+  "When disabled, OpenPets starts in the tray and the default pet can still be shown manually.": "关闭后，OpenPets 将仅在托盘启动，你仍可手动显示默认宠物。",
+  "Launch OpenPets at login": "登录时启动 OpenPets",
+  "Start OpenPets automatically when you sign in.": "登录系统时自动启动 OpenPets。",
+  "Pet": "宠物",
+  "Desktop pet controls": "桌面宠物控制",
+  "Pet scale": "宠物大小",
+  "Small": "小",
+  "Medium": "中",
+  "Large": "大",
+  "Custom": "自定义",
+  "Reset default pet position": "重置默认宠物位置",
+  "Moves the default pet back near the bottom-right of the primary display.": "将默认宠物移回主显示器右下角附近。",
+  "Reset": "重置",
+  "Animations": "动画",
+  "Reaction animations": "反应动画",
+  "Reset defaults": "恢复默认",
+  "Choose which animation your pet plays for each agent reaction. Preview uses your default pet without affecting the live desktop pet.": "为每种代理反应选择宠物播放的动画。预览使用你的默认宠物，不会影响正在桌面上运行的宠物。",
+  "Updates": "更新",
+  "App updates": "应用更新",
+  "Checking for updates": "正在检查更新",
+  "OpenPets checks public GitHub releases and opens the release page when an update is available.": "OpenPets 会检查 GitHub 公开发布版本，并在有更新时打开发布页面。",
+  "Check": "检查",
+  "Open release": "打开发布页",
+  "Changes save automatically.": "更改会自动保存。",
+  "Launch preference saved.": "启动偏好已保存。",
+  "Resetting pet position…": "正在重置宠物位置…",
+  "Default pet position reset.": "默认宠物位置已重置。",
+  "Couldn’t reset pet position. Try again.": "无法重置宠物位置，请重试。",
+  "Reaction animation settings are unavailable.": "反应动画设置不可用。",
+  "Saving reaction animations…": "正在保存反应动画…",
+  "Changed": "已更改",
+  "Reaction animations reset to defaults.": "反应动画已恢复默认。",
+  "Couldn’t reset reaction animations. Try again.": "无法重置反应动画，请重试。",
+  "Checking for updates…": "正在检查更新…",
+  "Couldn’t check for updates. Try again.": "无法检查更新，请重试。",
+  "OpenPets is up to date": "OpenPets 已是最新版本",
+  "Looking for the latest public GitHub release…": "正在查找最新的 GitHub 公开版本…",
+  "Update check unavailable": "无法检查更新",
+  "Couldn’t read the latest public GitHub release.": "无法读取最新的 GitHub 公开版本。",
+  "Check for updates": "检查更新",
+  "Update check finished.": "更新检查已完成。",
+  "Checking login setting…": "正在检查登录启动设置…",
+  "Launch at login is not available on this platform.": "当前平台不支持登录启动。",
+  "Couldn’t read login setting.": "无法读取登录启动设置。",
+  "Enabling launch at login…": "正在启用登录启动…",
+  "Disabling launch at login…": "正在关闭登录启动…",
+  "Launch at login preference saved.": "登录启动偏好已保存。",
+  "Couldn’t update launch at login. Try again.": "无法更新登录启动设置，请重试。",
+  "Saving scale…": "正在保存大小…",
+  "Saving language…": "正在保存语言…",
+  "Language preference saved.": "语言偏好已保存。",
+  "Couldn’t save language. Try again.": "无法保存语言，请重试。",
+  "Couldn’t save pet scale. Try again.": "无法保存宠物大小，请重试。",
+  "Saving…": "保存中…",
+  "Refreshing…": "刷新中…",
+  "Replacing…": "替换中…",
+  "Updating…": "更新中…",
+  "Checking…": "检查中…",
+  "Couldn’t save setting. Try again.": "无法保存设置，请重试。",
+  "Welcome": "欢迎",
+  "Integrations": "集成",
+  "Ready": "完成",
+  "Your AI coding companion": "你的 AI 编码伙伴",
+  "Next ›": "下一步 ›",
+  "Step 2": "第 2 步",
+  "Pick your desktop companion": "选择你的桌面伙伴",
+  "Open Pet Manager to browse pets, then return here to continue.": "打开宠物管理浏览宠物，然后回到这里继续。",
+  "You can also continue now. OpenPets still works with the bundled pet.": "你也可以现在继续。OpenPets 使用内置宠物也能正常工作。",
+  "Open Pet Manager": "打开宠物管理",
+  "Continue to next step": "继续下一步",
+  "Step 3": "第 3 步",
+  "Connect your coding tools": "连接你的编码工具",
+  "Open Integrations to connect Claude Code or OpenCode when you are ready. OpenPets shows previews and asks before changing MCP, hook, or OpenCode settings.": "准备好后打开“集成”来连接 Claude Code 或 OpenCode。OpenPets 会显示预览，并在修改 MCP、Hook 或 OpenCode 设置前征求确认。",
+  "Open Integrations to review agent setup, then return here to continue.": "打开“集成”查看代理设置，然后回到这里继续。",
+  "You can also continue now. Configuration is optional and can be done later from the tray.": "你也可以现在继续。配置是可选的，稍后可从托盘完成。",
+  "Open Integrations": "打开集成",
+  "OpenPets is ready": "OpenPets 已准备就绪",
+  "You can manage pets, open integrations, change settings, or quit from the tray at any time.": "你可以随时从托盘管理宠物、打开集成、更改设置或退出。",
+  "Nothing else is required. Start using OpenPets now, or reopen the setup windows below.": "无需其他步骤。现在就开始使用 OpenPets，或重新打开下方设置窗口。",
+  "Start using OpenPets": "开始使用 OpenPets",
+  "Closing this window before finishing keeps setup available from the tray.": "如果在完成前关闭此窗口，仍可从托盘继续设置。",
+  "Finishing…": "完成中…",
+  "Continue": "继续",
+  "Pet Manager": "宠物管理",
+  "Opening Pet Manager…": "正在打开宠物管理…",
+  "Pet Manager opened — return here to continue.": "宠物管理已打开，回到这里继续。",
+  "Couldn’t open Pet Manager. Try again from the button.": "无法打开宠物管理，请再试一次。",
+  "Opening Integrations…": "正在打开集成…",
+  "Integrations opened — return here to continue.": "集成页面已打开，回到这里继续。",
+  "Couldn’t open Integrations. Try again from the button.": "无法打开集成页面，请再试一次。",
+  "Install Claude or OpenCode integrations now, explore Pi manual setup, or configure the details when you need them.": "现在安装 Claude 或 OpenCode 集成、查看 Pi 的手动设置，或在需要时再配置详细内容。",
+  "Available integrations": "可用集成",
+  "Connect Claude Code to your OpenPets companion.": "将 Claude Code 连接到你的 OpenPets 伙伴。",
+  "Connect OpenCode globally to your OpenPets companion.": "全局连接 OpenCode 到你的 OpenPets 伙伴。",
+  "Connect Pi coding-agent activity through the OpenPets Pi extension package.": "通过 OpenPets Pi 扩展包连接 Pi 编码代理活动。",
+  "View setup": "查看设置",
+  "VS Code": "VS Code",
+  "Coming soon.": "即将支持。",
+  "Soon": "即将支持",
+  "Back to integrations": "返回集成列表",
+  "Integration": "集成",
+  "Connect Claude to your OpenPets companion. Basic setup is one card; hooks and command details are optional.": "将 Claude 连接到你的 OpenPets 伙伴。基础设置只需一个卡片；Hooks 和命令细节是可选的。",
+  "Connection": "连接",
+  "Checking setup…": "正在检查设置…",
+  "Checking Claude Code…": "正在检查 Claude Code…",
+  "Pet routing": "宠物路由",
+  "Configuration": "配置",
+  "Command paths": "命令路径",
+  "If Claude or Node.js is not detected from the app, paste the full executable path. Leave blank for automatic PATH detection.": "如果应用未检测到 Claude 或 Node.js，请粘贴完整可执行文件路径。留空则自动从 PATH 检测。",
+  "Claude command": "Claude 命令",
+  "Save path": "保存路径",
+  "Node.js command": "Node.js 命令",
+  "Use local dev commands": "使用本地开发命令",
+  "Developer-only: use this checkout instead of published packages.": "仅开发者使用：使用当前源码，而不是已发布包。",
+  "Install integration": "安装集成",
+  "Replace configuration": "替换配置",
+  "Remove integration": "移除集成",
+  "Refresh status": "刷新状态",
+  "Nothing changes until you choose an action.": "在你选择操作前，不会有任何改动。",
+  "Advanced MCP details": "高级 MCP 详情",
+  "Command and JSON preview": "命令与 JSON 预览",
+  "Inspect the MCP command OpenPets will add to Claude, or copy it for manual setup.": "查看 OpenPets 将添加到 Claude 的 MCP 命令，或复制用于手动设置。",
+  "Copy command": "复制命令",
+  "MCP JSON": "MCP JSON",
+  "Included": "已包含",
+  "Claude instructions": "Claude 指令",
+  "Checking Claude instructions…": "正在检查 Claude 指令…",
+  "Update instructions": "更新指令",
+  "Optional": "可选",
+  "Claude hooks": "Claude Hooks",
+  "Checking hooks…": "正在检查 Hooks…",
+  "Hooks let Claude events trigger pet reactions. They modify your global Claude Code settings.": "Hooks 允许 Claude 事件触发宠物反应。它们会修改你的全局 Claude Code 设置。",
+  "Install hooks": "安装 Hooks",
+  "Check hooks": "检查 Hooks",
+  "Remove hooks": "移除 Hooks",
+  "Advanced hook details": "高级 Hook 详情",
+  "Hooks JSON preview": "Hooks JSON 预览",
+  "Preview the OpenPets-managed Claude hook settings before installing or updating hooks.": "在安装或更新 Hooks 前，预览由 OpenPets 管理的 Claude Hook 设置。",
+  "Claude Code may need to be restarted after MCP changes.": "MCP 变更后，Claude Code 可能需要重启。",
+  "Connect OpenCode to OpenPets. Desktop setup writes global OpenCode config; use the CLI for project-local setup.": "将 OpenCode 连接到 OpenPets。桌面设置会写入全局 OpenCode 配置；项目级设置请使用 CLI。",
+  "Global connection": "全局连接",
+  "Checking OpenCode…": "正在检查 OpenCode…",
+  "If OpenCode or Node.js is not detected from the app, paste the full executable path. Leave blank for automatic PATH detection.": "如果应用未检测到 OpenCode 或 Node.js，请粘贴完整可执行文件路径。留空则自动从 PATH 检测。",
+  "OpenCode command": "OpenCode 命令",
+  "Install global setup": "安装全局设置",
+  "Refresh": "刷新",
+  "Global OpenCode config": "全局 OpenCode 配置",
+  "Copy config preview": "复制配置预览",
+  "OpenCode may need to be restarted after global setup changes.": "全局设置变更后，OpenCode 可能需要重启。",
+  "Manual integration": "手动集成",
+  "Status": "状态",
+  "Manual package setup": "手动包设置",
+  "Planned": "计划中",
+  "Commands": "命令",
+  "Pi package setup": "Pi 包设置",
+  "Copy global install": "复制全局安装命令",
+  "Copy project install": "复制项目安装命令",
+  "Pi setup is manual until real Pi CLI install validation is complete.": "在真正的 Pi CLI 安装校验完成前，Pi 设置仍为手动。",
+  "Checking Cursor MCP config…": "正在检查 Cursor MCP 配置…",
+  "OpenPets-only MCP config": "仅 OpenPets 的 MCP 配置",
+  "Copy preview": "复制预览",
+  "Optional project rules": "可选项目规则",
+  "Cursor rules preview": "Cursor 规则预览",
+  "Copy rules preview": "复制规则预览",
+  "Cursor may need to be restarted or reloaded after MCP config changes.": "MCP 配置变更后，Cursor 可能需要重启或重新加载。",
+  "Claude setup status is unavailable.": "Claude 设置状态不可用。",
+  "Launch-at-login status is unavailable.": "登录启动状态不可用。",
+  "Launch-at-login update failed.": "更新登录启动设置失败。",
+  "Couldn’t save reaction animation. Try again.": "无法保存反应动画，请重试。",
+  "Saved command path. Refreshed detection using the saved path.": "命令路径已保存，并已使用保存的路径重新检测。",
+  "Cleared command path. Refreshed automatic detection.": "命令路径已清除，并已重新执行自动检测。",
+  "Copied command.": "已复制命令。",
+  "Copied OpenCode config preview.": "已复制 OpenCode 配置预览。",
+  "Copied Cursor MCP preview.": "已复制 Cursor MCP 预览。",
+  "Copied Cursor rules preview.": "已复制 Cursor 规则预览。",
+  "OpenPets action failed.": "OpenPets 操作失败。"
+});
+
+function getCurrentDocumentLanguage() {
+  return document.body?.dataset.openpetsLanguage === "zh-CN" ? "zh-CN" : "en";
+}
+
+function translateUiText(value, language = getCurrentDocumentLanguage()) {
+  if (language !== "zh-CN" || typeof value !== "string" || value.length === 0) {
+    return value;
+  }
+
+  const exact = zhCnExactText[value];
+  if (exact) {
+    return exact;
+  }
+
+  let match = value.match(/^(\d+) pets$/u);
+  if (match) return `${match[1]} 只宠物`;
+  match = value.match(/^Preview (.+)$/u);
+  if (match) return `预览 ${match[1]}`;
+  match = value.match(/^Update available: (.+)$/u);
+  if (match) return `发现更新：${match[1]}`;
+  match = value.match(/^Update (.+) is available\.$/u);
+  if (match) return `可更新到 ${match[1]}。`;
+  match = value.match(/^Installed: (.+)\. Open the GitHub release page to download the update\.$/u);
+  if (match) return `当前已安装：${match[1]}。打开 GitHub 发布页下载更新。`;
+  match = value.match(/^Installed: (.+)\. Latest public release: (.+)\.$/u);
+  if (match) return `当前已安装：${match[1]}。最新公开版本：${match[2]}。`;
+  match = value.match(/^(.+) animation saved\.$/u);
+  if (match) return `${translateUiText(match[1], language)} 动画已保存。`;
+  match = value.match(/^(Small|Medium|Large|Custom) \(([^)]+)\)$/u);
+  if (match) return `${translateUiText(match[1], language)}（${match[2]}）`;
+  match = value.match(/^(Small|Medium|Large|Custom) pet scale saved\.$/u);
+  if (match) return `${translateUiText(match[1], language)}尺寸已保存。`;
+  return value;
+}
+
+function localizeDocument(language = getCurrentDocumentLanguage()) {
+  if (!document.body) {
+    return;
+  }
+
+  document.body.dataset.openpetsLanguage = language;
+  document.documentElement.lang = language === "zh-CN" ? "zh-CN" : "en";
+  if (language !== "zh-CN") {
+    return;
+  }
+
+  localizeTextNodes(document.body, language);
+  localizeAttributes(document.body, "placeholder", language);
+  localizeAttributes(document.body, "aria-label", language);
+  document.title = translateUiText(document.title, language);
+}
+
+function localizeTextNodes(root, language) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const parent = node.parentElement;
+      if (!parent) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (["SCRIPT", "STYLE", "PRE", "CODE"].includes(parent.tagName)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const nodes = [];
+  let current = walker.nextNode();
+  while (current) {
+    nodes.push(current);
+    current = walker.nextNode();
+  }
+
+  for (const node of nodes) {
+    const original = node.nodeValue;
+    const leading = original.match(/^\s*/u)?.[0] || "";
+    const trailing = original.match(/\s*$/u)?.[0] || "";
+    const translated = translateUiText(original.trim(), language);
+    if (translated !== original.trim()) {
+      node.nodeValue = `${leading}${translated}${trailing}`;
+    }
+  }
+}
+
+function localizeAttributes(root, attributeName, language) {
+  for (const element of root.querySelectorAll(`[${attributeName}]`)) {
+    const value = element.getAttribute(attributeName);
+    if (!value) {
+      continue;
+    }
+    const translated = translateUiText(value, language);
+    if (translated !== value) {
+      element.setAttribute(attributeName, translated);
+    }
+  }
+}
 
 contextBridge.exposeInMainWorld("openPets", api);
 contextBridge.exposeInMainWorld("openpetsAgentSetup", agentSetupApi);
@@ -81,6 +414,8 @@ async function renderCurrentState(view) {
   } else {
     await renderAgentSetup();
   }
+
+  localizeDocument(state.preferences.language);
 }
 
 async function renderOnboarding() {
@@ -120,13 +455,16 @@ async function renderOnboarding() {
     const button = requireButton("onboarding-finish");
     button.disabled = true;
     button.textContent = "Finishing…";
+    localizeDocument();
     void onboardingApi.complete().catch((error) => {
       button.disabled = false;
       button.textContent = "Start using OpenPets";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
   showStep(currentStep);
+  localizeDocument();
 }
 
 async function openOnboardingWindowManually(kind, opener) {
@@ -150,6 +488,7 @@ function markOnboardingWindowOpened(kind) {
     continueButton.className = "onboarding-promoted-continue";
     continueButton.textContent = "Continue";
   }
+  localizeDocument();
 }
 
 function updateOnboardingOpenStatus(kind, text, state) {
@@ -158,6 +497,7 @@ function updateOnboardingOpenStatus(kind, text, state) {
   if (!element) return;
   element.textContent = text;
   element.className = `onboarding-status-line${state ? ` ${state}` : ""}`;
+  localizeDocument();
 }
 
 async function renderAgentSetup(selectedPetId, commandMode) {
@@ -230,6 +570,7 @@ async function renderAgentSetup(selectedPetId, commandMode) {
   bindAgentSetupButton("claude-hooks-doctor", () => runAgentAction("doctor-hooks", select.value, getCommandMode()), snapshot.busy, "Checking…");
   bindAgentSetupButton("claude-hooks-install", () => runAgentAction("install-hooks", select.value, getCommandMode()), snapshot.busy, "Installing…");
   bindAgentSetupButton("claude-hooks-uninstall", () => runAgentAction("uninstall-hooks", select.value, getCommandMode()), snapshot.busy || snapshot.hookStatus.status === "not_installed", "Removing…");
+  localizeDocument();
 }
 
 function updateOpenCodeIntegration(snapshot, selected) {
@@ -785,6 +1126,7 @@ async function saveAgentCommandPath(kind, path, selectedPetId, commandMode, resu
   await renderAgentSetup(selectedPetId || "", commandMode);
   const result = document.getElementById(resultId || (kind === "opencode" ? "opencode-action-result" : "claude-action-result"));
   if (result) result.textContent = path.trim() ? "Saved command path. Refreshed detection using the saved path." : "Cleared command path. Refreshed automatic detection.";
+  localizeDocument();
 }
 
 async function copyText(text, resultId = "claude-action-result", successMessage = "Copied command.") {
@@ -794,6 +1136,7 @@ async function copyText(text, resultId = "claude-action-result", successMessage 
   } catch {
     requireElement(resultId).textContent = text;
   }
+  localizeDocument();
 }
 
 async function renderPetManager(state) {
@@ -815,6 +1158,7 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
     status.className = "pm-status-pill error";
     grid.textContent = "";
     detail.textContent = "";
+    localizeDocument();
     return;
   }
 
@@ -987,6 +1331,8 @@ function renderPetGallery(catalogState, codexState, state, defaultPetId) {
     if (selected) {
       renderPetDetail(detail, selected, defaultPetId);
     }
+
+    localizeDocument();
   };
 
   search.oninput = () => {
@@ -1341,9 +1687,11 @@ function setCardBusy(card, busy, label) {
       delete button.dataset.previousText;
     }
   }
+  localizeDocument();
 }
 
 function renderSettings(state) {
+  const languageSelect = requireSelect("app-language");
   const openOnLaunch = requireInput("open-default-pet-on-launch");
   const launchAtLogin = requireInput("launch-at-login");
   const launchAtLoginDetail = requireElement("launch-at-login-detail");
@@ -1351,12 +1699,15 @@ function renderSettings(state) {
   const scale = requireElement("pet-scale-value");
   const status = requireElement("settings-status");
 
+  languageSelect.value = state.preferences.language;
   openOnLaunch.checked = state.preferences.openDefaultPetOnLaunch;
   scaleSelect.value = String(state.preferences.petScale);
+  languageSelect.disabled = false;
   openOnLaunch.disabled = false;
   scaleSelect.disabled = false;
   scale.textContent = `${scaleLabelFor(state.preferences.petScale)} (${state.preferences.petScale}x)`;
 
+  bindLanguageSelect(languageSelect, state.preferences.language);
   bindCheckbox(openOnLaunch, "openDefaultPetOnLaunch", "Launch preference saved.");
   bindScaleSelect(scaleSelect, String(state.preferences.petScale));
   bindLaunchAtLogin(launchAtLogin, launchAtLoginDetail);
@@ -1374,9 +1725,12 @@ function renderSettings(state) {
     }).catch((error) => {
       resetButton.disabled = false;
       status.textContent = "Couldn’t reset pet position. Try again.";
+      localizeDocument(state.preferences.language);
       renderCaughtError(error);
     });
   };
+
+  localizeDocument(state.preferences.language);
 }
 
 async function renderReactionAnimationSettings() {
@@ -1399,6 +1753,7 @@ async function renderReactionAnimationSettings() {
     await api.updatePreferences({ reactionAnimationOverrides: nextOverrides });
     await renderReactionAnimationSettings();
     requireElement("settings-status").textContent = message;
+    localizeDocument();
   };
 
   for (const reaction of snapshot.reactions) {
@@ -1445,6 +1800,7 @@ async function renderReactionAnimationSettings() {
         updateReactionPreviewSprite(miniSprite, snapshot, selectedAnimation, true);
         setReactionAnimationControlsDisabled(false);
         requireElement("settings-status").textContent = "Couldn’t save reaction animation. Try again.";
+        localizeDocument();
         renderCaughtError(error);
       });
     };
@@ -1480,9 +1836,12 @@ async function renderReactionAnimationSettings() {
       resetButton.disabled = false;
       setReactionAnimationControlsDisabled(false);
       requireElement("settings-status").textContent = "Couldn’t reset reaction animations. Try again.";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
+
+  localizeDocument();
 }
 
 function setReactionAnimationControlsDisabled(disabled) {
@@ -1525,9 +1884,11 @@ function bindUpdateControls() {
     void api.checkForUpdates().then((status) => {
       renderUpdateStatus(status);
       requireElement("settings-status").textContent = updateStatusMessage(status);
+      localizeDocument();
     }).catch((error) => {
       checkButton.disabled = false;
       requireElement("settings-status").textContent = "Couldn’t check for updates. Try again.";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
@@ -1565,6 +1926,8 @@ function renderUpdateStatus(status) {
     title.textContent = "Check for updates";
     detail.textContent = "OpenPets checks public GitHub releases and opens the release page when an update is available.";
   }
+
+  localizeDocument();
 }
 
 function updateStatusMessage(status) {
@@ -1577,14 +1940,17 @@ function updateStatusMessage(status) {
 function bindLaunchAtLogin(input, detail) {
   input.disabled = true;
   detail.textContent = "Checking login setting…";
+  localizeDocument();
   void api.getLaunchAtLogin().then((state) => {
     if (!isLaunchAtLoginState(state)) throw new Error("Launch-at-login status is unavailable.");
     input.checked = state.enabled;
     input.disabled = !state.supported;
     detail.textContent = state.supported ? "Start OpenPets automatically when you sign in." : "Launch at login is not available on this platform.";
+    localizeDocument();
   }).catch((error) => {
     input.disabled = true;
     detail.textContent = "Couldn’t read login setting.";
+    localizeDocument();
     renderCaughtError(error);
   });
   input.onchange = () => {
@@ -1592,15 +1958,39 @@ function bindLaunchAtLogin(input, detail) {
     input.disabled = true;
     const status = requireElement("settings-status");
     status.textContent = input.checked ? "Enabling launch at login…" : "Disabling launch at login…";
+    localizeDocument();
     void api.setLaunchAtLogin(input.checked).then((state) => {
       if (!isLaunchAtLoginState(state)) throw new Error("Launch-at-login update failed.");
       input.checked = state.enabled;
       input.disabled = !state.supported;
       status.textContent = state.supported ? "Launch at login preference saved." : "Launch at login is not available on this platform.";
+      localizeDocument();
     }).catch((error) => {
       input.checked = previous;
       input.disabled = false;
       status.textContent = "Couldn’t update launch at login. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+}
+
+function bindLanguageSelect(select, currentValue) {
+  select.onchange = () => {
+    const previous = currentValue;
+    const value = select.value;
+    select.disabled = true;
+    const status = requireElement("settings-status");
+    status.textContent = "Saving language…";
+    localizeDocument();
+    void api.updatePreferences({ language: value }).then(() => {
+      requireElement("settings-status").textContent = "Language preference saved.";
+      localizeDocument(value === "zh-CN" ? "zh-CN" : "en");
+    }).catch((error) => {
+      select.value = previous;
+      select.disabled = false;
+      status.textContent = "Couldn’t save language. Try again.";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
@@ -1613,13 +2003,16 @@ function bindScaleSelect(select, currentValue) {
     select.disabled = true;
     const status = requireElement("settings-status");
     status.textContent = "Saving scale…";
+    localizeDocument();
     void api.updatePreferences({ petScale: value }).then(async () => {
       await renderCurrentState("settings");
       requireElement("settings-status").textContent = `${scaleLabelFor(value)} pet scale saved.`;
+      localizeDocument();
     }).catch((error) => {
       select.value = previous;
       select.disabled = false;
       status.textContent = "Couldn’t save pet scale. Try again.";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
@@ -1638,13 +2031,16 @@ function bindCheckbox(input, key, message) {
     input.disabled = true;
     const status = requireElement("settings-status");
     status.textContent = "Saving…";
+    localizeDocument();
     void api.updatePreferences({ [key]: input.checked }).then(async () => {
       await renderCurrentState("settings");
       requireElement("settings-status").textContent = message;
+      localizeDocument();
     }).catch((error) => {
       input.checked = previous;
       input.disabled = false;
       status.textContent = "Couldn’t save setting. Try again.";
+      localizeDocument();
       renderCaughtError(error);
     });
   };
@@ -1664,7 +2060,7 @@ function renderCaughtError(error) {
 function renderError(message) {
   const error = document.querySelector("[data-error]");
   if (error) {
-    error.textContent = message;
+    error.textContent = translateUiText(message);
     error.title = message;
   }
 }
@@ -1698,7 +2094,8 @@ function isStateSnapshot(value) {
     return false;
   }
 
-  return typeof value.preferences.defaultPetId === "string"
+  return (value.preferences.language === "en" || value.preferences.language === "zh-CN")
+    && typeof value.preferences.defaultPetId === "string"
     && typeof value.preferences.openDefaultPetOnLaunch === "boolean"
     && typeof value.preferences.speechBubblesEnabled === "boolean"
     && typeof value.preferences.petScale === "number"

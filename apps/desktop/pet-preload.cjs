@@ -63,11 +63,12 @@ ipcRenderer.on("openpets:pet-reaction-state", (_event, state) => {
 });
 
 ipcRenderer.on("openpets:pet-content-state", (_event, state) => {
-  if (!state || typeof state.bodyHtml !== "string" || state.bodyHtml.length > 64 * 1024 || !allowedReactionStates.has(state.reactionState)) {
+  if (!state || typeof state.bodyHtml !== "string" || state.bodyHtml.length > 64 * 1024 || !allowedMotionStates.has(state.motionState) || !allowedReactionStates.has(state.reactionState)) {
     return;
   }
 
   const apply = () => {
+    document.documentElement.dataset.motionState = state.motionState;
     document.documentElement.dataset.reactionState = state.reactionState;
     document.body.innerHTML = state.bodyHtml;
   };
