@@ -8,6 +8,7 @@ const api = {
   getCatalogSearch: () => ipcRenderer.invoke("openpets:get-catalog-search"),
   getCodexPets: () => ipcRenderer.invoke("openpets:get-codex-pets"),
   updatePreferences: (patch) => ipcRenderer.invoke("openpets:update-preferences", patch),
+  updatePetReactionMessages: (petId, overrides, ambientSpeechSettings) => ipcRenderer.invoke("openpets:update-pet-reaction-messages", petId, overrides, ambientSpeechSettings),
   getLaunchAtLogin: () => ipcRenderer.invoke("openpets:get-launch-at-login"),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke("openpets:set-launch-at-login", enabled),
   getUpdateStatus: () => ipcRenderer.invoke("openpets:get-update-status"),
@@ -43,8 +44,9 @@ let petGalleryInstance = 0;
 let reactionAnimationRenderSequence = 0;
 let reactionAnimationSaveChain = Promise.resolve();
 const remoteCatalogFilters = new Set(["original", "western", "asian"]);
+const editablePetReactions = ["idle", "thinking", "working", "editing", "running", "testing", "waiting", "waving", "success", "error", "celebrating"];
 const zhCnExactText = Object.freeze({
-  "OpenPets state is unavailable.": "OpenPets 状态不可用。",
+  "App state is unavailable.": "应用状态不可用。",
   "Onboarding state is unavailable.": "引导状态不可用。",
   "Install a Pet": "安装宠物",
   "Pick a companion for your terminal.": "为你的终端挑选一个伙伴。",
@@ -75,7 +77,7 @@ const zhCnExactText = Object.freeze({
   "A local Codex companion.": "一个本地 Codex 伙伴。",
   "No installed pets match your search.": "没有已安装宠物匹配你的搜索。",
   "No Codex pets match your search.": "没有 Codex 宠物匹配你的搜索。",
-  "No OpenPets originals match your search.": "没有 OpenPets 原创宠物匹配你的搜索。",
+  "No originals match your search.": "没有原创宠物匹配你的搜索。",
   "No Western pets match your search.": "没有西方风格宠物匹配你的搜索。",
   "No Asian pets match your search.": "没有亚洲风格宠物匹配你的搜索。",
   "No pets match your search.": "没有宠物匹配你的搜索。",
@@ -88,6 +90,34 @@ const zhCnExactText = Object.freeze({
   "Available to import from ~/.codex/pets.": "可从 ~/.codex/pets 导入。",
   "Available in the catalog and also found in ~/.codex/pets. Import uses the local Codex copy.": "目录中可用，并且也在 ~/.codex/pets 中找到。导入时会使用本地 Codex 副本。",
   "Available to install from the catalog.": "可从目录中安装。",
+  "Pet speech presets": "宠物预设台词",
+  "Set what this pet says in each state. Enter one phrase per line and one will be randomly picked when that reaction appears.": "设置这只宠物在不同状态下会说的话。每行填写一条，会在该状态出现时随机挑选一句。",
+  "Ambient speech intervals": "自动说话间隔",
+  "Adjust how often this pet talks while moving or while your mouse is hovering over it.": "调整这只宠物在移动时，以及鼠标悬停在它身上时的说话频率。",
+  "Moving interval": "移动时间隔",
+  "Hovered interval": "悬停时间隔",
+  "Seconds between speech bubbles while the pet is walking.": "宠物走动时，两次说话气泡之间的秒数。",
+  "Seconds between speech bubbles while the pet is hovered.": "鼠标悬停在宠物上时，两次说话气泡之间的秒数。",
+  "One phrase per line. Up to 24 phrases per state, each within 36 characters.": "每行一条台词。每个状态最多 24 条，每条不超过 36 个字符。",
+  "Enter a value from 1 to 60 seconds.": "请输入 1 到 60 秒之间的数值。",
+  "Built-in defaults are used until you save custom phrases.": "在你保存自定义台词之前，会继续使用内置默认文案。",
+  "Install or import this pet to customize what it says.": "请先安装或导入这只宠物，然后才能自定义它说的话。",
+  "Save phrases": "保存台词",
+  "Reset phrases": "重置台词",
+  "Saving custom phrases…": "正在保存自定义台词…",
+  "Custom phrases saved.": "自定义台词已保存。",
+  "Custom phrases reset to defaults.": "自定义台词已恢复为默认。",
+  "Couldn’t save custom phrases. Try again.": "无法保存自定义台词，请重试。",
+  "Idle": "空闲",
+  "Working": "工作中",
+  "Editing": "编辑中",
+  "Running": "执行中",
+  "Testing": "测试中",
+  "Waiting": "等待中",
+  "Waving": "打招呼",
+  "Success": "成功",
+  "Error": "出错",
+  "Celebrating": "庆祝中",
   "Setting…": "设置中…",
   "Importing…": "导入中…",
   "Installing…": "安装中…",
@@ -99,9 +129,9 @@ const zhCnExactText = Object.freeze({
   "General": "常规",
   "Startup and companion behavior": "启动与伙伴行为",
   "Open default pet on app launch": "启动应用时打开默认宠物",
-  "When disabled, OpenPets starts in the tray and the default pet can still be shown manually.": "关闭后，OpenPets 将仅在托盘启动，你仍可手动显示默认宠物。",
-  "Launch OpenPets at login": "登录时启动 OpenPets",
-  "Start OpenPets automatically when you sign in.": "登录系统时自动启动 OpenPets。",
+  "When disabled, the app starts in the tray and the default pet can still be shown manually.": "关闭后，应用将仅在托盘启动，你仍可手动显示默认宠物。",
+  "Launch at login": "登录时启动",
+  "Start automatically when you sign in.": "登录系统时自动启动。",
   "Pet": "宠物",
   "Desktop pet controls": "桌面宠物控制",
   "Pet scale": "宠物大小",
@@ -119,7 +149,7 @@ const zhCnExactText = Object.freeze({
   "Updates": "更新",
   "App updates": "应用更新",
   "Checking for updates": "正在检查更新",
-  "OpenPets checks public GitHub releases and opens the release page when an update is available.": "OpenPets 会检查 GitHub 公开发布版本，并在有更新时打开发布页面。",
+  "The app checks public GitHub releases and opens the release page when an update is available.": "应用会检查 GitHub 公开发布版本，并在有更新时打开发布页面。",
   "Check": "检查",
   "Open release": "打开发布页",
   "Changes save automatically.": "更改会自动保存。",
@@ -134,7 +164,7 @@ const zhCnExactText = Object.freeze({
   "Couldn’t reset reaction animations. Try again.": "无法重置反应动画，请重试。",
   "Checking for updates…": "正在检查更新…",
   "Couldn’t check for updates. Try again.": "无法检查更新，请重试。",
-  "OpenPets is up to date": "OpenPets 已是最新版本",
+  "App is up to date": "已是最新版本",
   "Looking for the latest public GitHub release…": "正在查找最新的 GitHub 公开版本…",
   "Update check unavailable": "无法检查更新",
   "Couldn’t read the latest public GitHub release.": "无法读取最新的 GitHub 公开版本。",
@@ -166,19 +196,19 @@ const zhCnExactText = Object.freeze({
   "Step 2": "第 2 步",
   "Pick your desktop companion": "选择你的桌面伙伴",
   "Open Pet Manager to browse pets, then return here to continue.": "打开宠物管理浏览宠物，然后回到这里继续。",
-  "You can also continue now. OpenPets still works with the bundled pet.": "你也可以现在继续。OpenPets 使用内置宠物也能正常工作。",
+  "You can also continue now. The app still works with the bundled pet.": "你也可以现在继续。使用内置宠物也能正常工作。",
   "Open Pet Manager": "打开宠物管理",
   "Continue to next step": "继续下一步",
   "Step 3": "第 3 步",
   "Connect your coding tools": "连接你的编码工具",
-  "Open Integrations to connect Claude Code or OpenCode when you are ready. OpenPets shows previews and asks before changing MCP, hook, or OpenCode settings.": "准备好后打开“集成”来连接 Claude Code 或 OpenCode。OpenPets 会显示预览，并在修改 MCP、Hook 或 OpenCode 设置前征求确认。",
+  "Open Integrations to connect Claude Code or OpenCode when you are ready. The app shows previews and asks before changing MCP, hook, or OpenCode settings.": "准备好后打开“集成”来连接 Claude Code 或 OpenCode。应用会显示预览，并在修改 MCP、Hook 或 OpenCode 设置前征求确认。",
   "Open Integrations to review agent setup, then return here to continue.": "打开“集成”查看代理设置，然后回到这里继续。",
   "You can also continue now. Configuration is optional and can be done later from the tray.": "你也可以现在继续。配置是可选的，稍后可从托盘完成。",
   "Open Integrations": "打开集成",
-  "OpenPets is ready": "OpenPets 已准备就绪",
+  "Setup is ready": "准备就绪",
   "You can manage pets, open integrations, change settings, or quit from the tray at any time.": "你可以随时从托盘管理宠物、打开集成、更改设置或退出。",
-  "Nothing else is required. Start using OpenPets now, or reopen the setup windows below.": "无需其他步骤。现在就开始使用 OpenPets，或重新打开下方设置窗口。",
-  "Start using OpenPets": "开始使用 OpenPets",
+  "Nothing else is required. Get started now, or reopen the setup windows below.": "无需其他步骤。现在就开始使用，或重新打开下方设置窗口。",
+  "Get started": "开始使用",
   "Closing this window before finishing keeps setup available from the tray.": "如果在完成前关闭此窗口，仍可从托盘继续设置。",
   "Finishing…": "完成中…",
   "Continue": "继续",
@@ -403,7 +433,7 @@ async function renderCurrentState(view) {
   const state = await api.getState();
 
   if (!isStateSnapshot(state)) {
-    renderError("OpenPets state is unavailable.");
+    renderError("App state is unavailable.");
     return;
   }
 
@@ -1389,6 +1419,8 @@ function createPetManagerItem(id, displayName, description, installed, catalogPe
     catalogPet,
     codexPet,
     codexImported,
+    reactionMessageOverrides: installed?.reactionMessageOverrides || undefined,
+    ambientSpeechSettings: installed?.ambientSpeechSettings || undefined,
     previewSrc: usesThumbnail ? defaultThumbnailSrc : preview,
     detailPreviewSrc: usesThumbnail ? defaultThumbnailSrc : detailPreview,
     previewIsSpriteSheet: !cardUsesThumbnail,
@@ -1403,7 +1435,7 @@ function createPetManagerItem(id, displayName, description, installed, catalogPe
 function createEmptyPetGalleryMessage(filterName) {
   if (filterName === "installed") return "No installed pets match your search.";
   if (filterName === "codex") return "No Codex pets match your search.";
-  if (filterName === "original") return "No OpenPets originals match your search.";
+  if (filterName === "original") return "No originals match your search.";
   if (filterName === "western") return "No Western pets match your search.";
   if (filterName === "asian") return "No Asian pets match your search.";
   return "No pets match your search.";
@@ -1525,6 +1557,8 @@ function renderPetDetail(container, pet, defaultPetId) {
   }
   container.append(miniGrid);
 
+  container.append(createPetSpeechEditor(pet));
+
   const actions = document.createElement("div");
   actions.className = "pm-detail-actions";
   const primary = document.createElement("button");
@@ -1543,6 +1577,223 @@ function renderPetDetail(container, pet, defaultPetId) {
     actions.append(remove);
   }
   container.append(actions);
+}
+
+function createPetSpeechEditor(pet) {
+  const card = document.createElement("section");
+  card.className = "pm-script-card";
+
+  const title = document.createElement("h3");
+  title.className = "pm-script-title";
+  title.textContent = "Pet speech presets";
+  card.append(title);
+
+  const description = document.createElement("p");
+  description.className = "pm-script-description";
+  description.textContent = pet.installed
+    ? "Set what this pet says in each state. Enter one phrase per line and OpenPets will randomly pick one when that reaction appears."
+    : "Install or import this pet to customize what it says.";
+  card.append(description);
+
+  if (!pet.installed) {
+    return card;
+  }
+
+  const note = document.createElement("p");
+  note.className = "pm-script-note";
+  note.textContent = "One phrase per line. Up to 24 phrases per state, each within 36 characters.";
+  card.append(note);
+
+  const intervalSection = document.createElement("div");
+  intervalSection.className = "pm-script-intervals";
+
+  const intervalTitle = document.createElement("p");
+  intervalTitle.className = "pm-script-note";
+  intervalTitle.textContent = "Ambient speech intervals";
+  intervalSection.append(intervalTitle);
+
+  const intervalDescription = document.createElement("p");
+  intervalDescription.className = "pm-script-note subdued";
+  intervalDescription.textContent = "Adjust how often this pet talks while moving or while your mouse is hovering over it.";
+  intervalSection.append(intervalDescription);
+
+  const intervalGrid = document.createElement("div");
+  intervalGrid.className = "pm-script-interval-grid";
+  const ambientSpeechSettings = pet.ambientSpeechSettings || {};
+  for (const config of [
+    { key: "movingIntervalMs", label: "Moving interval", hint: "Seconds between speech bubbles while the pet is walking." },
+    { key: "hoveredIntervalMs", label: "Hovered interval", hint: "Seconds between speech bubbles while the pet is hovered." },
+  ]) {
+    const field = document.createElement("label");
+    field.className = "pm-script-interval-field";
+
+    const label = document.createElement("span");
+    label.textContent = config.label;
+    field.append(label);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "1";
+    input.max = "60";
+    input.step = "1";
+    input.className = "pm-script-interval-input";
+    input.dataset.intervalKey = config.key;
+    input.placeholder = "Enter a value from 1 to 60 seconds.";
+    input.value = typeof ambientSpeechSettings[config.key] === "number" ? String(Math.round(ambientSpeechSettings[config.key] / 1000)) : "";
+    field.append(input);
+
+    const hint = document.createElement("small");
+    hint.className = "pm-script-interval-hint";
+    hint.textContent = config.hint;
+    field.append(hint);
+
+    intervalGrid.append(field);
+  }
+  intervalSection.append(intervalGrid);
+  card.append(intervalSection);
+
+  const grid = document.createElement("div");
+  grid.className = "pm-script-grid";
+  const overrides = pet.reactionMessageOverrides || {};
+  for (const reaction of editablePetReactions) {
+    const field = document.createElement("label");
+    field.className = "pm-script-field";
+    field.setAttribute("for", `pm-script-${reaction}`);
+
+    const label = document.createElement("span");
+    label.textContent = formatReactionLabel(reaction);
+    field.append(label);
+
+    const textarea = document.createElement("textarea");
+    textarea.id = `pm-script-${reaction}`;
+    textarea.className = "pm-script-input";
+    textarea.rows = 4;
+    textarea.dataset.reaction = reaction;
+    textarea.placeholder = formatReactionPlaceholder(reaction);
+    textarea.value = Array.isArray(overrides[reaction]) ? overrides[reaction].join("\n") : "";
+    field.append(textarea);
+
+    grid.append(field);
+  }
+  card.append(grid);
+
+  const defaultNote = document.createElement("p");
+  defaultNote.className = "pm-script-note subdued";
+  defaultNote.textContent = "Built-in defaults are used until you save custom phrases.";
+  card.append(defaultNote);
+
+  const actions = document.createElement("div");
+  actions.className = "pm-script-actions";
+
+  const save = document.createElement("button");
+  save.id = "pm-script-save";
+  save.type = "button";
+  setIconButtonContent(save, "check", "Save phrases");
+  save.addEventListener("click", () => {
+    void savePetReactionMessages(pet.id);
+  });
+  actions.append(save);
+
+  const reset = document.createElement("button");
+  reset.id = "pm-script-reset";
+  reset.type = "button";
+  reset.className = "secondary";
+  setIconButtonContent(reset, "repeat", "Reset phrases");
+  reset.addEventListener("click", () => {
+    for (const input of card.querySelectorAll(".pm-script-input")) {
+      if (input instanceof HTMLTextAreaElement) input.value = "";
+    }
+    for (const input of card.querySelectorAll(".pm-script-interval-input")) {
+      if (input instanceof HTMLInputElement) input.value = "";
+    }
+    void savePetReactionMessages(pet.id, true);
+  });
+  actions.append(reset);
+
+  card.append(actions);
+
+  const status = document.createElement("p");
+  status.id = "pm-script-status";
+  status.className = "pm-script-status";
+  card.append(status);
+
+  return card;
+}
+
+async function savePetReactionMessages(petId, resetting = false) {
+  const saveButton = document.getElementById("pm-script-save");
+  const resetButton = document.getElementById("pm-script-reset");
+  const status = document.getElementById("pm-script-status");
+  if (saveButton instanceof HTMLButtonElement) saveButton.disabled = true;
+  if (resetButton instanceof HTMLButtonElement) resetButton.disabled = true;
+  if (status) status.textContent = "Saving custom phrases…";
+  localizeDocument();
+
+  try {
+    const overrides = resetting ? undefined : collectPetReactionMessageOverrides();
+    const ambientSpeechSettings = resetting ? undefined : collectPetAmbientSpeechSettings();
+    const state = await api.updatePetReactionMessages(petId, overrides, ambientSpeechSettings);
+    activePetManagerSelection = petId;
+    await renderPetManager(state);
+    const nextStatus = document.getElementById("pm-script-status");
+    if (nextStatus) nextStatus.textContent = resetting || !overrides ? "Custom phrases reset to defaults." : "Custom phrases saved.";
+    localizeDocument(state.preferences.language);
+  } catch (error) {
+    if (saveButton instanceof HTMLButtonElement) saveButton.disabled = false;
+    if (resetButton instanceof HTMLButtonElement) resetButton.disabled = false;
+    if (status) status.textContent = "Couldn’t save custom phrases. Try again.";
+    localizeDocument();
+    renderCaughtError(error);
+  }
+}
+
+function collectPetReactionMessageOverrides() {
+  const overrides = {};
+  for (const input of document.querySelectorAll(".pm-script-input[data-reaction]")) {
+    if (!(input instanceof HTMLTextAreaElement)) continue;
+    const reaction = input.dataset.reaction;
+    if (!reaction) continue;
+    const phrases = input.value
+      .split(/\r?\n/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (phrases.length > 0) overrides[reaction] = phrases;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function collectPetAmbientSpeechSettings() {
+  const settings = {};
+  for (const input of document.querySelectorAll(".pm-script-interval-input[data-interval-key]")) {
+    if (!(input instanceof HTMLInputElement)) continue;
+    const key = input.dataset.intervalKey;
+    if (!key) continue;
+    const trimmed = input.value.trim();
+    if (!trimmed) continue;
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds)) continue;
+    settings[key] = Math.round(seconds * 1000);
+  }
+  return Object.keys(settings).length > 0 ? settings : undefined;
+}
+
+function formatReactionLabel(reaction) {
+  if (reaction === "idle") return "Idle";
+  if (reaction === "thinking") return "Thinking";
+  if (reaction === "working") return "Working";
+  if (reaction === "editing") return "Editing";
+  if (reaction === "running") return "Running";
+  if (reaction === "testing") return "Testing";
+  if (reaction === "waiting") return "Waiting";
+  if (reaction === "waving") return "Waving";
+  if (reaction === "success") return "Success";
+  if (reaction === "error") return "Error";
+  if (reaction === "celebrating") return "Celebrating";
+  return reaction;
+}
+
+function formatReactionPlaceholder(reaction) {
+  return `${formatReactionLabel(reaction)} phrases, one per line`;
 }
 
 function setIconButtonContent(button, icon, label) {

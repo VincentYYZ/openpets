@@ -8,12 +8,25 @@ import { builtInPet } from "./built-in-pet.js";
 import type { Point } from "./display.js";
 import { normalizeAppLanguage, type AppLanguage } from "./i18n.js";
 import { assertSafePetId, getInstalledPetDir } from "./pet-paths.js";
+import { normalizeReactionMessageOverrides, type ReactionMessageOverrides } from "./reaction-messages.js";
 import { normalizeReactionAnimationOverrides, type ReactionAnimationOverrides } from "./reaction-animation-mapping.js";
+
+export interface PetAmbientSpeechSettings {
+  readonly movingIntervalMs?: number;
+  readonly hoveredIntervalMs?: number;
+}
+
+export const minAmbientSpeechIntervalMs = 1_000;
+export const maxAmbientSpeechIntervalMs = 60_000;
+export const defaultMovingAmbientSpeechIntervalMs = 6_500;
+export const defaultHoveredAmbientSpeechIntervalMs = 6_500;
 
 export interface InstalledPetState {
   readonly id: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly reactionMessageOverrides?: ReactionMessageOverrides;
+  readonly ambientSpeechSettings?: PetAmbientSpeechSettings;
   readonly builtIn: boolean;
   readonly protected: boolean;
   readonly installed: boolean;
@@ -89,6 +102,33 @@ export function updatePreferences(patch: Partial<OpenPetsStateV1["preferences"]>
   const nextState = normalizeState({
     ...state,
     preferences,
+  });
+
+  commitState(nextState);
+  return getAppStateSnapshot();
+}
+
+export function updateInstalledPetReactionMessageOverrides(petId: string, reactionMessageOverrides: ReactionMessageOverrides | undefined): OpenPetsStateV1 {
+  return updateInstalledPetSpeechConfig(petId, { reactionMessageOverrides });
+}
+
+export function updateInstalledPetSpeechConfig(petId: string, config: { readonly reactionMessageOverrides?: ReactionMessageOverrides; readonly ambientSpeechSettings?: PetAmbientSpeechSettings }): OpenPetsStateV1 {
+  const state = getInitializedState();
+  const existing = state.pets.installed.find((pet) => pet.id === petId);
+
+  if (!existing) {
+    throw new Error(`Cannot update unknown pet: ${petId}`);
+  }
+
+  const nextState = normalizeState({
+    ...state,
+    pets: {
+      installed: state.pets.installed.map((pet) => pet.id === petId ? {
+        ...pet,
+        reactionMessageOverrides: config.reactionMessageOverrides,
+        ambientSpeechSettings: config.ambientSpeechSettings,
+      } : pet),
+    },
   });
 
   commitState(nextState);
@@ -324,9 +364,22 @@ function normalizeInstalledPets(value: Record<string, unknown>): InstalledPetSta
 
   const normalized = installed
     .map((pet) => normalizeInstalledPet(pet))
-    .filter((pet): pet is InstalledPetState => Boolean(pet && pet.id !== builtInPet.id));
+    .filter((pet): pet is InstalledPetState => Boolean(pet));
 
-  return [builtInPet, ...normalized];
+  const builtInState = normalized.find((pet) => pet.id === builtInPet.id);
+  const explicitPets = normalized.filter((pet) => pet.id !== builtInPet.id);
+
+  return [
+    {
+      ...builtInPet,
+      description: builtInState?.description,
+      reactionMessageOverrides: builtInState?.reactionMessageOverrides,
+      ambientSpeechSettings: builtInState?.ambientSpeechSettings,
+      broken: builtInState?.broken,
+      brokenReason: builtInState?.brokenReason,
+    },
+    ...explicitPets,
+  ];
 }
 
 function normalizeInstalledPet(value: unknown): InstalledPetState | null {
@@ -334,18 +387,22 @@ function normalizeInstalledPet(value: unknown): InstalledPetState | null {
     return null;
   }
 
-  try {
-    assertSafePetId(value.id);
-  } catch {
-    return null;
+  if (value.id !== builtInPet.id) {
+    try {
+      assertSafePetId(value.id);
+    } catch {
+      return null;
+    }
   }
 
-  const brokenReason = validateInstalledPetFiles(value.id);
+  const brokenReason = value.id === builtInPet.id ? undefined : validateInstalledPetFiles(value.id);
 
   return {
     id: value.id,
     displayName: value.displayName,
     description: typeof value.description === "string" ? value.description : undefined,
+    reactionMessageOverrides: normalizeReactionMessageOverrides(value.reactionMessageOverrides),
+    ambientSpeechSettings: normalizePetAmbientSpeechSettings(value.ambientSpeechSettings),
     builtIn: value.id === builtInPet.id ? true : value.builtIn === true,
     protected: value.id === builtInPet.id ? true : value.protected === true,
     installed: true,
@@ -424,6 +481,48 @@ function normalizeSource(value: unknown): InstalledPetState["source"] | undefine
     zip: value.zip,
     preview: value.preview,
   };
+}
+
+export function validatePetAmbientSpeechSettings(value: unknown): PetAmbientSpeechSettings | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("Invalid pet ambient speech settings.");
+  const movingIntervalMs = validateAmbientSpeechIntervalMs(value.movingIntervalMs, "moving");
+  const hoveredIntervalMs = validateAmbientSpeechIntervalMs(value.hoveredIntervalMs, "hovered");
+  return movingIntervalMs === undefined && hoveredIntervalMs === undefined
+    ? undefined
+    : {
+      ...(movingIntervalMs === undefined ? {} : { movingIntervalMs }),
+      ...(hoveredIntervalMs === undefined ? {} : { hoveredIntervalMs }),
+    };
+}
+
+function normalizePetAmbientSpeechSettings(value: unknown): PetAmbientSpeechSettings | undefined {
+  if (!isRecord(value)) return undefined;
+  const movingIntervalMs = normalizeAmbientSpeechIntervalMs(value.movingIntervalMs);
+  const hoveredIntervalMs = normalizeAmbientSpeechIntervalMs(value.hoveredIntervalMs);
+  return movingIntervalMs === undefined && hoveredIntervalMs === undefined
+    ? undefined
+    : {
+      ...(movingIntervalMs === undefined ? {} : { movingIntervalMs }),
+      ...(hoveredIntervalMs === undefined ? {} : { hoveredIntervalMs }),
+    };
+}
+
+function validateAmbientSpeechIntervalMs(value: unknown, mode: "moving" | "hovered"): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid ${mode} ambient speech interval.`);
+  const rounded = Math.round(value);
+  if (rounded < minAmbientSpeechIntervalMs || rounded > maxAmbientSpeechIntervalMs) {
+    throw new Error(`Invalid ${mode} ambient speech interval.`);
+  }
+  return rounded;
+}
+
+function normalizeAmbientSpeechIntervalMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const rounded = Math.round(value);
+  if (rounded < minAmbientSpeechIntervalMs || rounded > maxAmbientSpeechIntervalMs) return undefined;
+  return rounded;
 }
 
 function normalizeMaybePosition(value: unknown): Point | undefined {

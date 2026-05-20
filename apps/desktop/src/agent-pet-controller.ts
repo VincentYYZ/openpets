@@ -149,7 +149,7 @@ function setAgentDisplay(petId: string, display: PetTransientDisplay): void {
   debug("pet.agent", "display set", { petId, reaction: display.reaction, hasMessage: Boolean(display.message), hasReactionMessage: Boolean(display.reactionMessage) });
   const nextGeneration = (displayGenerations.get(petId) ?? 0) + 1;
   displayGenerations.set(petId, nextGeneration);
-  const preparedDisplay = mergePetTransientDisplay(transientDisplays.get(petId) ?? null, { ...display, dismissToken: String(nextGeneration) });
+  const preparedDisplay = mergePetTransientDisplay(transientDisplays.get(petId) ?? null, { ...display, dismissToken: String(nextGeneration) }, getReactionMessageOverridesForPet(petId));
   transientDisplays.set(petId, preparedDisplay);
   if (display.reaction) setStatusBadge(petId, display.reaction);
   const existingTimer = transientTimers.get(petId);
@@ -254,4 +254,8 @@ function getCurrentDismissToken(petId: string, display: PetTransientDisplay | nu
 
 function getPreferredPetScale(): PetScaleValue {
   return getAppStateSnapshot().preferences.petScale as PetScaleValue;
+}
+
+function getReactionMessageOverridesForPet(petId: string) {
+  return getAppStateSnapshot().pets.installed.find((pet) => pet.id === petId)?.reactionMessageOverrides;
 }

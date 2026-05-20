@@ -10,7 +10,8 @@ export const catalogV3Url = "https://openpets.dev/pets/catalog.v3.json";
 const fixtureRelativePath = "catalog.v2.fixture.json";
 const maxCatalogBytes = 1_000_000;
 const maxCatalogV3PageBytes = 256_000;
-const fetchTimeoutMs = 5_000;
+const fetchTimeoutMs = 15_000;
+const maxFetchAttempts = 2;
 
 export interface CatalogUiState {
   readonly source: "remote" | "fixture" | "error";
@@ -241,6 +242,21 @@ async function getV2CatalogOrFixture(): Promise<CatalogV2> {
 }
 
 async function fetchLimitedText(url: string, maxBytes: number): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxFetchAttempts; attempt += 1) {
+    try {
+      return await fetchLimitedTextOnce(url, maxBytes);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxFetchAttempts || !isRetryableFetchError(error)) {
+        throw toCatalogFetchError(url, error);
+      }
+    }
+  }
+  throw toCatalogFetchError(url, lastError);
+}
+
+async function fetchLimitedTextOnce(url: string, maxBytes: number): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
 
@@ -258,6 +274,24 @@ async function fetchLimitedText(url: string, maxBytes: number): Promise<string> 
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isRetryableFetchError(error: unknown): boolean {
+  return isAbortError(error) || error instanceof TypeError;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function toCatalogFetchError(url: string, error: unknown): Error {
+  if (isAbortError(error)) {
+    return new Error(`Catalog request timed out after ${Math.round(fetchTimeoutMs / 1000)}s: ${url}`);
+  }
+  if (error instanceof TypeError) {
+    return new Error(`Catalog request failed. Check network access to ${new URL(url).host}. ${error.message}`);
+  }
+  return error instanceof Error ? error : new Error("Catalog request failed.");
 }
 
 async function tryLoadFixtureCatalog(): Promise<{ readonly ok: true; readonly catalog: CatalogV2 } | { readonly ok: false; readonly error: string }> {

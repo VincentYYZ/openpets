@@ -17,7 +17,8 @@ const maxZipDownloadBytes = 50 * 1024 * 1024;
 const maxExtractedTotalBytes = 200 * 1024 * 1024;
 const maxFiles = 500;
 const maxIndividualFileBytes = 100 * 1024 * 1024;
-const downloadTimeoutMs = 30_000;
+const downloadTimeoutMs = 90_000;
+const maxDownloadAttempts = 2;
 
 const operations = new Set<string>();
 
@@ -107,6 +108,21 @@ export async function withPetOperation<T>(key: string, callback: () => Promise<T
 
 async function downloadPetZip(zipUrl: string): Promise<Buffer> {
   validateZipUrl(zipUrl);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxDownloadAttempts; attempt += 1) {
+    try {
+      return await downloadPetZipOnce(zipUrl);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxDownloadAttempts || !isRetryableDownloadError(error)) {
+        throw toPetZipDownloadError(zipUrl, error);
+      }
+    }
+  }
+  throw toPetZipDownloadError(zipUrl, lastError);
+}
+
+async function downloadPetZipOnce(zipUrl: string): Promise<Buffer> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), downloadTimeoutMs);
 
@@ -127,6 +143,24 @@ async function downloadPetZip(zipUrl: string): Promise<Buffer> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  return isAbortError(error) || error instanceof TypeError;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function toPetZipDownloadError(zipUrl: string, error: unknown): Error {
+  if (isAbortError(error)) {
+    return new Error(`Pet download timed out after ${Math.round(downloadTimeoutMs / 1000)}s. Check network access to ${new URL(zipUrl).host} and try again.`);
+  }
+  if (error instanceof TypeError) {
+    return new Error(`Pet download failed. Check network access to ${new URL(zipUrl).host}. ${error.message}`);
+  }
+  return error instanceof Error ? error : new Error("Pet download failed.");
 }
 
 function validateZipUrl(value: string): void {

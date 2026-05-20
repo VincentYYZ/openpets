@@ -6,7 +6,7 @@ export type { PetBehaviorCommand, PetBehaviorEvent, PetBehaviorMode, PetBehavior
 export function reducePetBehavior(state: PetBehaviorState, event: PetBehaviorEvent): PetBehaviorTransition {
   switch (event.type) {
     case "tick": {
-      if (state.mode === "dragged" || state.folderDropPromptVisible || event.now < state.autoWalkSuspendedUntil) {
+      if (state.mode === "dragged" || state.mode === "hovered" || state.folderDropPromptVisible || event.now < state.autoWalkSuspendedUntil) {
         return { state, commands: [] };
       }
 
@@ -34,6 +34,28 @@ export function reducePetBehavior(state: PetBehaviorState, event: PetBehaviorEve
           ...state,
           mode: "idle",
           autoWalkSuspendedUntil: event.now + event.resumeAfterMs,
+        },
+        commands: [],
+      };
+    case "pointer-enter":
+      if (state.mode === "dragged" || state.folderDropPromptVisible) {
+        return { state, commands: [] };
+      }
+      return {
+        state: {
+          ...state,
+          mode: "hovered",
+        },
+        commands: [],
+      };
+    case "pointer-leave":
+      if (state.mode === "dragged" || state.folderDropPromptVisible) {
+        return { state, commands: [] };
+      }
+      return {
+        state: {
+          ...state,
+          mode: "idle",
         },
         commands: [],
       };

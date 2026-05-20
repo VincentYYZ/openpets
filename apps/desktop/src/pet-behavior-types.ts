@@ -1,4 +1,4 @@
-export type PetBehaviorMode = "idle" | "walk-left" | "walk-right" | "dragged" | "drop-preview";
+export type PetBehaviorMode = "idle" | "walk-left" | "walk-right" | "dragged" | "drop-preview" | "hovered";
 
 export interface PetBehaviorState {
   readonly mode: PetBehaviorMode;
@@ -32,6 +32,12 @@ export type PetBehaviorEvent =
     }
   | {
       readonly type: "folder-drag-enter";
+    }
+  | {
+      readonly type: "pointer-enter";
+    }
+  | {
+      readonly type: "pointer-leave";
     }
   | {
       readonly type: "folder-drag-leave";

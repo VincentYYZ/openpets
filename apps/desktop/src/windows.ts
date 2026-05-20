@@ -6,13 +6,14 @@ import { app, BrowserWindow, ipcMain, protocol, type IpcMainInvokeEvent } from "
 
 import { getAgentSetupSnapshot, runAgentSetupAction, updateAgentSetupCommandPaths } from "./agent-setup.js";
 import { refreshAgentPetContent } from "./agent-pet-controller.js";
-import { completeOnboarding, getAppStateSnapshot, normalizePetScale, petScaleOptions, updatePreferences } from "./app-state.js";
+import { completeOnboarding, getAppStateSnapshot, normalizePetScale, petScaleOptions, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings } from "./app-state.js";
 import { getCatalogPageUiState, getCatalogSearchUiState, getCatalogUiState } from "./catalog.js";
 import { getCodexPetsUiState, importCodexPet, readCodexPetSpritesheet } from "./codex-pets.js";
 import { refreshDefaultPetContent, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
 import { installPet, removePet, setDefaultInstalledPet } from "./pet-installation.js";
 import { getHtmlLanguage, getTaskWindowDefinitions, normalizeAppLanguage, type AppLanguage } from "./i18n.js";
 import { getInstalledPetDir } from "./pet-paths.js";
+import { validateReactionMessageOverrides } from "./reaction-messages.js";
 import { defaultPetSprite, reactionAnimationMetadata, selectableAnimationMetadata, validateReactionAnimationOverrides } from "./reaction-animation-mapping.js";
 import { checkForGitHubReleaseUpdate, getUpdateStatus, openUpdateReleasePage } from "./update-checker.js";
 
@@ -190,6 +191,18 @@ export function installInternalUiHandlers(): void {
 
     const state = await removePet(petId);
     refreshDefaultPetContent();
+    return state;
+  });
+
+  ipcMain.handle("openpets:update-pet-reaction-messages", (event, petId: unknown, overrides: unknown, ambientSpeechSettings: unknown) => {
+    assertAllowedSender(event, ["pet-manager"]);
+    if (typeof petId !== "string") throw new Error("Invalid pet id.");
+    const state = updateInstalledPetSpeechConfig(petId, {
+      reactionMessageOverrides: validateReactionMessageOverrides(overrides),
+      ambientSpeechSettings: validatePetAmbientSpeechSettings(ambientSpeechSettings),
+    });
+    refreshDefaultPetContent();
+    refreshAgentPetContent();
     return state;
   });
 
@@ -402,7 +415,7 @@ function createPlaceholderHtml(definition: TaskWindowDefinition, language: AppLa
       </head>
       <body>
         <main>
-          <p class="eyebrow">OpenPets Phase 01</p>
+          <p class="eyebrow">Phase 01</p>
           <h1>${escapeHtml(definition.heading)}</h1>
           <p>${escapeHtml(definition.description)}</p>
           <span class="badge">Placeholder window</span>
@@ -414,7 +427,6 @@ function createPlaceholderHtml(definition: TaskWindowDefinition, language: AppLa
 }
 
 function createPetManagerHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
-  const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const defaultThumbnailUrl = createAssetDataUrl("default-pet-thumbnail.png", "image/png");
   const htmlLanguage = escapeHtml(getHtmlLanguage(language));
 
@@ -431,7 +443,6 @@ function createPetManagerHtml(definition: TaskWindowDefinition, language: AppLan
       <body data-openpets-view="pet-manager" data-default-pet-thumbnail-src="${escapeHtml(defaultThumbnailUrl)}" data-openpets-language="${escapeHtml(language)}">
         <main class="pm-shell">
           <section class="pm-gallery-pane" aria-labelledby="pm-title">
-            <img class="pm-logo" src="${escapeHtml(logoUrl)}" alt="OpenPets" draggable="false" />
             <header class="pm-header">
               <h1 id="pm-title">Install a Pet</h1>
               <p class="lede">Pick a companion for your terminal.</p>
@@ -464,7 +475,6 @@ function createPetManagerHtml(definition: TaskWindowDefinition, language: AppLan
 }
 
 function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
-  const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const petsUrl = createAssetDataUrl("onboarding-pets.webp", "image/webp");
   const htmlLanguage = escapeHtml(getHtmlLanguage(language));
 
@@ -480,7 +490,6 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
       <body data-openpets-view="onboarding" data-openpets-language="${escapeHtml(language)}">
         <main class="onboarding-main">
           <header class="onboarding-header" id="onboarding-header">
-            <p class="eyebrow">OpenPets</p>
             <h1>${escapeHtml(definition.heading)}</h1>
             <p class="lede">${escapeHtml(definition.description)}</p>
           </header>
@@ -493,9 +502,8 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
           
           <section class="onboarding-step welcome-hero" data-step-panel="0">
             <div class="welcome-content">
-              <img class="welcome-logo" src="${escapeHtml(logoUrl)}" alt="OpenPets" draggable="false" />
               <h2 class="welcome-title">Your AI coding companion</h2>
-              <p class="welcome-body">OpenPets lives in your tray and gives your coding agents a friendly desktop companion — one command at a time.</p>
+              <p class="welcome-body">A friendly desktop companion that lives in your tray and reacts to your coding agents — one command at a time.</p>
               <p class="welcome-default">Starting with <strong id="onboarding-default-pet">the bundled pet</strong>.</p>
               <div class="welcome-actions">
                 <button id="onboarding-welcome-next" class="welcome-primary-btn">Next ›</button>
@@ -514,7 +522,7 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
             <h2>Pick your desktop companion</h2>
             <p>Your current default pet is <strong id="onboarding-pets-default-pet">the bundled pet</strong>. Pet Manager is opening so you can browse what is installed and add more later.</p>
             <p id="onboarding-pets-status" class="onboarding-status-line" aria-live="polite">Open Pet Manager to browse pets, then return here to continue.</p>
-            <p class="onboarding-helper">You can also continue now. OpenPets still works with the bundled pet.</p>
+            <p class="onboarding-helper">You can also continue now. The app still works with the bundled pet.</p>
             <div class="onboarding-flow-actions">
               <button id="onboarding-open-pets">Open Pet Manager</button>
               <button id="onboarding-pets-next" class="onboarding-continue-link">Continue to next step</button>
@@ -523,7 +531,7 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
           <section class="onboarding-step onboarding-flow-card" data-step-panel="2" hidden>
             <span class="onboarding-step-badge">Step 3</span>
             <h2>Connect your coding tools</h2>
-            <p>Open Integrations to connect Claude Code or OpenCode when you are ready. OpenPets shows previews and asks before changing MCP, hook, or OpenCode settings.</p>
+            <p>Open Integrations to connect Claude Code or OpenCode when you are ready. The app shows previews and asks before changing MCP, hook, or OpenCode settings.</p>
             <p id="onboarding-agents-status" class="onboarding-status-line" aria-live="polite">Open Integrations to review agent setup, then return here to continue.</p>
             <p class="onboarding-helper">You can also continue now. Configuration is optional and can be done later from the tray.</p>
             <div class="onboarding-flow-actions">
@@ -533,11 +541,11 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
           </section>
           <section class="onboarding-step onboarding-flow-card ready-card" data-step-panel="3" hidden>
             <span class="onboarding-step-badge">Ready</span>
-            <h2>OpenPets is ready</h2>
+            <h2>Setup is ready</h2>
             <p>You can manage pets, open integrations, change settings, or quit from the tray at any time.</p>
-            <p class="onboarding-helper">Nothing else is required. Start using OpenPets now, or reopen the setup windows below.</p>
+            <p class="onboarding-helper">Nothing else is required. Get started now, or reopen the setup windows below.</p>
             <div class="onboarding-flow-actions ready-actions">
-              <button id="onboarding-finish">Start using OpenPets</button>
+              <button id="onboarding-finish">Get started</button>
               <button id="onboarding-ready-pets" class="onboarding-continue-link">Open Pet Manager</button>
               <button id="onboarding-ready-agents" class="onboarding-continue-link">Open Integrations</button>
             </div>
@@ -550,7 +558,6 @@ function createOnboardingHtml(definition: TaskWindowDefinition, language: AppLan
 }
 
 function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLanguage): string {
-  const logoUrl = createAssetDataUrl("onboarding-logo.webp", "image/webp");
   const integrationIcons = {
     claude: createAssetDataUrl("integrations/claude.svg", "image/svg+xml"),
     cursor: createAssetDataUrl("integrations/cursor.svg", "image/svg+xml"),
@@ -575,8 +582,6 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
         <main class="agent-shell">
           <section id="integrations-view" class="integrations-view" aria-labelledby="agent-title">
             <header class="integrations-header">
-              <img class="agent-logo" src="${escapeHtml(logoUrl)}" alt="OpenPets" draggable="false" />
-              <p class="eyebrow">OpenPets</p>
               <h1 id="agent-title" tabindex="-1">Integrations</h1>
               <p class="lede">Install Claude or OpenCode integrations now, explore Pi manual setup, or configure the details when you need them.</p>
             </header>
@@ -588,7 +593,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
                   <span id="integration-claude-status" class="agent-status-pill">Checking</span>
                 </div>
                 <h2>Claude Code</h2>
-                <p>Connect Claude Code to your OpenPets companion.</p>
+                <p>Connect Claude Code to your desktop companion.</p>
                 <div class="integration-actions stacked">
                   <button id="integration-claude-install" class="agent-action primary" disabled data-loading="true">
                     <svg class="pm-button-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 1 0 9 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -603,7 +608,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
 
               <article class="integration-card" data-integration-card="opencode" tabindex="-1">
                 <div class="integration-card-top"><span class="integration-icon"><img src="${escapeHtml(integrationIcons.opencode)}" alt="" draggable="false" /></span><span id="integration-opencode-status" class="agent-status-pill">Checking</span></div>
-                <h2>OpenCode</h2><p>Connect OpenCode globally to your OpenPets companion.</p>
+                <h2>OpenCode</h2><p>Connect OpenCode globally to your desktop companion.</p>
                 <div class="integration-actions stacked">
                   <button id="integration-opencode-install" class="agent-action primary" disabled data-loading="true">Checking…</button>
                   <button id="integration-opencode-configure" class="agent-action secondary" disabled data-loading="true">Checking…</button>
@@ -611,14 +616,14 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
               </article>
               <article class="integration-card" data-integration-card="pi" tabindex="-1">
                 <div class="integration-card-top"><span class="integration-icon"><img src="${escapeHtml(integrationIcons.pi)}" alt="" draggable="false" /></span><span id="integration-pi-status" class="agent-status-pill info">Manual</span></div>
-                <h2>Pi</h2><p>Connect Pi coding-agent activity through the OpenPets Pi extension package.</p>
+                <h2>Pi</h2><p>Connect Pi coding-agent activity through the Pi extension package.</p>
                 <div class="integration-actions stacked">
                   <button id="integration-pi-configure" class="agent-action secondary">View setup</button>
                 </div>
               </article>
               <article class="integration-card" data-integration-card="cursor" tabindex="-1">
                 <div class="integration-card-top"><span class="integration-icon"><img src="${escapeHtml(integrationIcons.cursor)}" alt="" draggable="false" /></span><span id="integration-cursor-status" class="agent-status-pill">Checking</span></div>
-                <h2>Cursor</h2><p>Connect Cursor to your OpenPets companion via global MCP config.</p>
+                <h2>Cursor</h2><p>Connect Cursor to your desktop companion via global MCP config.</p>
                 <div class="integration-actions stacked">
                   <button id="integration-cursor-install" class="agent-action primary" disabled data-loading="true">Checking…</button>
                   <button id="integration-cursor-configure" class="agent-action secondary" disabled data-loading="true">Checking…</button>
@@ -648,7 +653,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
               <header class="agent-title-block compact-title">
                 <p class="eyebrow">Integration</p>
                 <h1 id="claude-detail-title" tabindex="-1">Claude Code</h1>
-                <p class="lede">Connect Claude to your OpenPets companion. Basic setup is one card; hooks and command details are optional.</p>
+                <p class="lede">Connect Claude to your desktop companion. Basic setup is one card; hooks and command details are optional.</p>
               </header>
 
               <article class="agent-status-card connection-card">
@@ -697,7 +702,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
                       <strong>Command and JSON preview</strong>
                     </span>
                   </summary>
-                  <p class="agent-note">Inspect the MCP command OpenPets will add to Claude, or copy it for manual setup.</p>
+                  <p class="agent-note">Inspect the MCP command that will be added to Claude, or copy it for manual setup.</p>
                   <div class="agent-actions advanced-actions">
                     <button id="claude-copy-command" class="agent-action secondary compact">Copy command</button>
                   </div>
@@ -716,7 +721,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
                   <span id="claude-memory-status" class="agent-status-pill">Checking</span>
                 </div>
                 <p id="claude-memory-details" class="agent-note">Checking Claude instructions…</p>
-                <p class="agent-inline-note">OpenPets writes its guidance to <code>~/.claude/openpets.md</code> and adds one managed import to <code>~/.claude/CLAUDE.md</code>. Existing Claude instructions are preserved.</p>
+                <p class="agent-inline-note">Guidance is written to <code>~/.claude/openpets.md</code> and one managed import is added to <code>~/.claude/CLAUDE.md</code>. Existing Claude instructions are preserved.</p>
                 <div class="agent-actions memory-actions">
                   <button id="claude-memory-install" class="agent-action secondary">Update instructions</button>
                 </div>
@@ -744,7 +749,7 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
                       <strong>Hooks JSON preview</strong>
                     </span>
                   </summary>
-                  <p class="agent-note">Preview the OpenPets-managed Claude hook settings before installing or updating hooks.</p>
+                  <p class="agent-note">Preview the managed Claude hook settings before installing or updating hooks.</p>
                   <pre id="claude-hooks-preview" class="agent-preview-code hooks-preview" aria-label="Claude hooks JSON preview" aria-live="polite"></pre>
                 </details>
               </article>
@@ -756,13 +761,13 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
           <section id="opencode-detail-view" class="claude-detail-view" aria-labelledby="opencode-detail-title" hidden>
             <div class="claude-detail-toolbar"><button id="opencode-integration-back" class="agent-action secondary compact">Back to integrations</button></div>
             <section class="agent-setup-pane" aria-labelledby="opencode-detail-title">
-              <header class="agent-title-block compact-title"><p class="eyebrow">Integration</p><h1 id="opencode-detail-title" tabindex="-1">OpenCode</h1><p class="lede">Connect OpenCode to OpenPets. Desktop setup writes global OpenCode config; use the CLI for project-local setup.</p></header>
+              <header class="agent-title-block compact-title"><p class="eyebrow">Integration</p><h1 id="opencode-detail-title" tabindex="-1">OpenCode</h1><p class="lede">Connect OpenCode to the desktop companion. Desktop setup writes global OpenCode config; use the CLI for project-local setup.</p></header>
               <article class="agent-status-card connection-card">
                 <div class="agent-section-header"><span><small>Global connection</small><strong id="opencode-status-title">Checking setup…</strong></span><span id="opencode-status" class="agent-status-pill">Checking</span></div>
                 <p id="opencode-details" class="agent-note">Checking OpenCode…</p>
                 <div class="agent-control-group"><label class="agent-field-label" for="opencode-pet-select">Pet routing</label><select id="opencode-pet-select" class="agent-select"></select></div>
                 <section class="agent-command-paths" aria-labelledby="opencode-command-paths-title"><div class="agent-command-paths-title"><small>Configuration</small><strong id="opencode-command-paths-title">Command paths</strong></div><p class="agent-note">If OpenCode or Node.js is not detected from the app, paste the full executable path. Leave blank for automatic PATH detection.</p><label class="agent-subfield" for="opencode-command-path"><span>OpenCode command</span><div class="agent-path-row"><input id="opencode-command-path" class="agent-text-input" type="text" spellcheck="false" placeholder="/Users/alvin/.opencode/bin/opencode" /><button id="opencode-command-path-save" class="agent-action secondary compact">Save path</button></div></label><label class="agent-subfield" for="opencode-node-command-path"><span>Node.js command</span><div class="agent-path-row"><input id="opencode-node-command-path" class="agent-text-input" type="text" spellcheck="false" placeholder="/Users/name/.nvm/versions/node/v22/bin/node" /><button id="opencode-node-command-path-save" class="agent-action secondary compact">Save path</button></div></label></section>
-                <p class="agent-hook-warning warning">Desktop OpenCode setup is global and can affect every OpenCode project. For project-local setup, run <code>openpets configure --agent opencode --pet &lt;id&gt;</code>. OpenCode may need npm/network access to load the published OpenPets plugin unless it is already cached or installed.</p>
+                <p class="agent-hook-warning warning">Desktop OpenCode setup is global and can affect every OpenCode project. For project-local setup, run <code>openpets configure --agent opencode --pet &lt;id&gt;</code>. OpenCode may need npm/network access to load the published plugin unless it is already cached or installed.</p>
                 <div class="agent-actions agent-main-actions"><button id="opencode-install" class="agent-action primary">Install global setup</button><button id="opencode-remove" class="agent-action danger">Remove global setup</button><button id="opencode-refresh" class="agent-action secondary">Refresh</button></div>
                 <details class="agent-inline-details" open><summary><span><small>Preview</small><strong>Global OpenCode config</strong></span></summary><p id="opencode-paths" class="agent-note"></p><div class="agent-actions advanced-actions"><button id="opencode-copy-config" class="agent-action secondary compact">Copy config preview</button></div><pre id="opencode-json-preview" class="agent-preview-code json-preview" aria-label="OpenCode config preview" aria-live="polite"></pre></details>
               </article>
@@ -773,10 +778,10 @@ function createAgentSetupHtml(definition: TaskWindowDefinition, language: AppLan
           <section id="pi-detail-view" class="claude-detail-view" aria-labelledby="pi-detail-title" hidden>
             <div class="claude-detail-toolbar"><button id="pi-integration-back" class="agent-action secondary compact">Back to integrations</button></div>
             <section class="agent-setup-pane" aria-labelledby="pi-detail-title">
-              <header class="agent-title-block compact-title"><p class="eyebrow">Manual integration</p><h1 id="pi-detail-title" tabindex="-1">Pi</h1><p class="lede">Use Pi's package system to load the OpenPets extension. The extension maps Pi session and tool activity to local pet reactions without forwarding prompts or tool output.</p></header>
+              <header class="agent-title-block compact-title"><p class="eyebrow">Manual integration</p><h1 id="pi-detail-title" tabindex="-1">Pi</h1><p class="lede">Use Pi's package system to load the Pi extension. The extension maps Pi session and tool activity to local pet reactions without forwarding prompts or tool output.</p></header>
               <article class="agent-status-card connection-card">
                 <div class="agent-section-header"><span><small>Status</small><strong>Manual package setup</strong></span><span class="agent-status-pill info">Planned</span></div>
-                <p class="agent-note">The OpenPets Pi package is prepared for extension-first integration. Keep the desktop app running for pet updates. Desktop does not edit Pi settings automatically yet.</p>
+                <p class="agent-note">The Pi package is prepared for extension-first integration. Keep the desktop app running for pet updates. Desktop does not edit Pi settings automatically yet.</p>
                 <div class="docs-table-wrap">
                   <table>
                     <tbody>
@@ -797,15 +802,15 @@ pi remove npm:@open-pets/pi</pre></details>
           <section id="cursor-detail-view" class="claude-detail-view" aria-labelledby="cursor-detail-title" hidden>
             <div class="claude-detail-toolbar"><button id="cursor-integration-back" class="agent-action secondary compact">Back to integrations</button></div>
             <section class="agent-setup-pane" aria-labelledby="cursor-detail-title">
-              <header class="agent-title-block compact-title"><p class="eyebrow">Integration</p><h1 id="cursor-detail-title" tabindex="-1">Cursor</h1><p class="lede">Connect Cursor to OpenPets. Desktop setup writes global Cursor MCP config at ~/.cursor/mcp.json. Use the CLI for project-local setup.</p></header>
+              <header class="agent-title-block compact-title"><p class="eyebrow">Integration</p><h1 id="cursor-detail-title" tabindex="-1">Cursor</h1><p class="lede">Connect Cursor to the desktop companion. Desktop setup writes global Cursor MCP config at ~/.cursor/mcp.json. Use the CLI for project-local setup.</p></header>
               <article class="agent-status-card connection-card">
                 <div class="agent-section-header"><span><small>Global connection</small><strong id="cursor-status-title">Checking setup…</strong></span><span id="cursor-status" class="agent-status-pill">Checking</span></div>
                 <p id="cursor-details" class="agent-note">Checking Cursor MCP config…</p>
                 <div class="agent-control-group"><label class="agent-field-label" for="cursor-pet-select">Pet routing</label><select id="cursor-pet-select" class="agent-select"></select></div>
                 <section class="agent-command-paths" aria-labelledby="cursor-command-paths-title"><div class="agent-command-paths-title"><small>Configuration</small><strong id="cursor-command-paths-title">Command paths</strong></div><p class="agent-note">If Node.js is not detected from the app, paste the full executable path. Leave blank for automatic PATH detection.</p><label class="agent-subfield" for="cursor-node-command-path"><span>Node.js command</span><div class="agent-path-row"><input id="cursor-node-command-path" class="agent-text-input" type="text" spellcheck="false" placeholder="/Users/name/.nvm/versions/node/v22/bin/node" /><button id="cursor-node-command-path-save" class="agent-action secondary compact">Save path</button></div></label></section>
-                <p class="agent-hook-warning warning">Desktop Cursor setup is global and can affect every Cursor project. For project-local setup, run <code>openpets configure --agent cursor --pet &lt;id&gt;</code>. For project rules, run <code>openpets configure --agent cursor --rules-only</code> or copy the preview below into your project. Cursor may need a refreshed chat after rule changes. Published mode uses npx and may require npm/network/cache access. OpenPets only edits its own <code>mcpServers.openpets</code> entry.</p>
+                <p class="agent-hook-warning warning">Desktop Cursor setup is global and can affect every Cursor project. For project-local setup, run <code>openpets configure --agent cursor --pet &lt;id&gt;</code>. For project rules, run <code>openpets configure --agent cursor --rules-only</code> or copy the preview below into your project. Cursor may need a refreshed chat after rule changes. Published mode uses npx and may require npm/network/cache access. Only the <code>mcpServers.openpets</code> entry is edited.</p>
                 <div class="agent-actions agent-main-actions"><button id="cursor-install" class="agent-action primary">Install global setup</button><button id="cursor-replace" class="agent-action primary">Replace configuration</button><button id="cursor-remove" class="agent-action danger">Remove global setup</button><button id="cursor-refresh" class="agent-action secondary">Refresh</button></div>
-                <details class="agent-inline-details" open><summary><span><small>Preview</small><strong>OpenPets-only MCP config</strong></span></summary><p id="cursor-paths" class="agent-note"></p><div class="agent-actions advanced-actions"><button id="cursor-copy-preview" class="agent-action secondary compact">Copy preview</button></div><pre id="cursor-json-preview" class="agent-preview-code json-preview" aria-label="Cursor MCP config preview" aria-live="polite"></pre></details>
+                <details class="agent-inline-details" open><summary><span><small>Preview</small><strong>Managed MCP config</strong></span></summary><p id="cursor-paths" class="agent-note"></p><div class="agent-actions advanced-actions"><button id="cursor-copy-preview" class="agent-action secondary compact">Copy preview</button></div><pre id="cursor-json-preview" class="agent-preview-code json-preview" aria-label="Cursor MCP config preview" aria-live="polite"></pre></details>
                 <details class="agent-inline-details"><summary><span><small>Optional project rules</small><strong>Cursor rules preview</strong></span></summary><p id="cursor-rules-path" class="agent-note">Project rules file: .cursor/rules/openpets.mdc. Desktop does not write project rules.</p><div class="agent-actions advanced-actions"><button id="cursor-copy-rules" class="agent-action secondary compact">Copy rules preview</button></div><pre id="cursor-rules-preview" class="agent-preview-code command-preview" aria-label="Cursor rules preview" aria-live="polite"></pre></details>
               </article>
               <p id="cursor-action-result" class="agent-result" aria-live="polite">Cursor may need to be restarted or reloaded after MCP config changes.</p>
@@ -832,7 +837,6 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
       <body data-openpets-view="settings" data-openpets-language="${escapeHtml(language)}">
         <main class="settings-shell">
           <header class="settings-header">
-            <p class="eyebrow">OpenPets</p>
             <h1>${escapeHtml(definition.heading)}</h1>
             <p class="lede">${escapeHtml(definition.description)}</p>
           </header>
@@ -861,14 +865,14 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
             <label class="setting-row">
               <span>
                 <strong>Open default pet on app launch</strong>
-                <small>When disabled, OpenPets starts in the tray and the default pet can still be shown manually.</small>
+                <small>When disabled, the app starts in the tray and the default pet can still be shown manually.</small>
               </span>
               <input id="open-default-pet-on-launch" type="checkbox" />
             </label>
             <label class="setting-row">
               <span>
-                <strong>Launch OpenPets at login</strong>
-                <small id="launch-at-login-detail">Start OpenPets automatically when you sign in.</small>
+                <strong>Launch at login</strong>
+                <small id="launch-at-login-detail">Start automatically when you sign in.</small>
               </span>
               <input id="launch-at-login" type="checkbox" />
             </label>
@@ -916,7 +920,7 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
             <div class="setting-row">
               <span>
                 <strong id="update-status-title">Checking for updates</strong>
-                <small id="update-status-detail">OpenPets checks public GitHub releases and opens the release page when an update is available.</small>
+                <small id="update-status-detail">The app checks public GitHub releases and opens the release page when an update is available.</small>
               </span>
               <span class="settings-actions-inline">
                 <button id="check-for-updates">Check</button>
@@ -1186,7 +1190,7 @@ function createTaskWindowStyles(): string {
     body[data-openpets-view="pet-manager"] .pm-card-action:disabled { cursor: default; opacity: 1; }
     body[data-openpets-view="pet-manager"] .pm-load-more-wrap { grid-column: 1 / -1; display: flex; justify-content: center; padding: 10px 0 2px; }
     body[data-openpets-view="pet-manager"] .pm-load-more { min-height: 32px; padding: 7px 14px; border-radius: 10px; border: 1px solid rgba(37, 99, 235, 0.34); background: rgba(255,255,255,0.82); color: #176df2; font-weight: 900; box-shadow: 0 8px 20px rgba(61,99,160,0.07), inset 0 1px 0 rgba(255,255,255,0.9); }
-    body[data-openpets-view="pet-manager"] .pm-detail-pane { min-height: 0; height: 100%; overflow: hidden; box-sizing: border-box; padding: 30px 34px; border: 1px solid rgba(126, 161, 210, 0.48); border-radius: 24px; background: rgba(255,255,255,0.76); box-shadow: 0 24px 60px rgba(61, 99, 160, 0.15), inset 0 1px 0 rgba(255,255,255,0.96); color: #14264d; }
+    body[data-openpets-view="pet-manager"] .pm-detail-pane { min-height: 0; height: 100%; overflow: auto; box-sizing: border-box; padding: 30px 34px; border: 1px solid rgba(126, 161, 210, 0.48); border-radius: 24px; background: rgba(255,255,255,0.76); box-shadow: 0 24px 60px rgba(61, 99, 160, 0.15), inset 0 1px 0 rgba(255,255,255,0.96); color: #14264d; }
     body[data-openpets-view="pet-manager"] .pm-detail-title { margin: 0 0 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 34px; color: #102149; }
     body[data-openpets-view="pet-manager"] .pm-detail-description { height: 74px; margin: 0 0 16px; color: #253b67; font-size: 16px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-wrap: pretty; }
     body[data-openpets-view="pet-manager"] .pm-hero-stage { height: 235px; display: grid; place-items: center; margin: 0 0 20px; border-radius: 22px; background: radial-gradient(circle at 82% 24%, rgba(191, 219, 254, 0.62), transparent 13%), radial-gradient(circle at 18% 35%, rgba(219, 234, 254, 0.72), transparent 12%), linear-gradient(180deg, rgba(255,255,255,0.54), rgba(239, 247, 255, 0.26)); position: relative; overflow: hidden; }
@@ -1197,6 +1201,26 @@ function createTaskWindowStyles(): string {
     body[data-openpets-view="pet-manager"] .pm-mini { display: grid; gap: 7px; justify-items: center; padding: 12px 10px; border: 1px solid rgba(126, 161, 210, 0.34); border-radius: 13px; background: rgba(255,255,255,0.68); box-shadow: 0 10px 22px rgba(61, 99, 160, 0.08); }
     body[data-openpets-view="pet-manager"] .pm-mini-sprite { width: 56px; height: 61px; overflow: hidden; border-radius: 14px; }
     body[data-openpets-view="pet-manager"] .pm-mini span { color: #22385f; font-size: 13px; font-weight: 800; }
+    body[data-openpets-view="pet-manager"] .pm-script-card { display: grid; gap: 12px; margin: 0 0 24px; padding: 18px; border: 1px solid rgba(126, 161, 210, 0.34); border-radius: 18px; background: rgba(255,255,255,0.7); box-shadow: 0 10px 22px rgba(61, 99, 160, 0.08); }
+    body[data-openpets-view="pet-manager"] .pm-script-title { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 18px; }
+    body[data-openpets-view="pet-manager"] .pm-script-description, body[data-openpets-view="pet-manager"] .pm-script-note, body[data-openpets-view="pet-manager"] .pm-script-status { margin: 0; color: #425676; font-size: 13px; line-height: 1.5; }
+    body[data-openpets-view="pet-manager"] .pm-script-note.subdued { color: #607492; }
+    body[data-openpets-view="pet-manager"] .pm-script-intervals { display: grid; gap: 10px; padding: 14px; border-radius: 14px; border: 1px solid rgba(126, 161, 210, 0.28); background: rgba(248, 251, 255, 0.72); }
+    body[data-openpets-view="pet-manager"] .pm-script-interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    body[data-openpets-view="pet-manager"] .pm-script-interval-field { display: grid; gap: 6px; color: #1d3157; font-size: 13px; font-weight: 800; }
+    body[data-openpets-view="pet-manager"] .pm-script-interval-input { width: 100%; min-height: 42px; box-sizing: border-box; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(126, 161, 210, 0.48); background: rgba(255,255,255,0.96); color: #102149; font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: inset 0 1px 2px rgba(148, 163, 184, 0.15); }
+    body[data-openpets-view="pet-manager"] .pm-script-interval-input:focus { outline: none; border-color: rgba(37, 99, 235, 0.72); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), inset 0 1px 2px rgba(148, 163, 184, 0.15); }
+    body[data-openpets-view="pet-manager"] .pm-script-interval-hint { color: #607492; font-size: 12px; line-height: 1.45; font-weight: 700; }
+    body[data-openpets-view="pet-manager"] .pm-script-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    body[data-openpets-view="pet-manager"] .pm-script-field { display: grid; gap: 6px; color: #1d3157; font-size: 13px; font-weight: 800; }
+    body[data-openpets-view="pet-manager"] .pm-script-input { width: 100%; min-height: 96px; box-sizing: border-box; resize: vertical; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(126, 161, 210, 0.48); background: rgba(248, 251, 255, 0.95); color: #102149; font: 700 12px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: inset 0 1px 2px rgba(148, 163, 184, 0.15); }
+    body[data-openpets-view="pet-manager"] .pm-script-input:focus { outline: none; border-color: rgba(37, 99, 235, 0.72); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), inset 0 1px 2px rgba(148, 163, 184, 0.15); }
+    body[data-openpets-view="pet-manager"] .pm-script-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    body[data-openpets-view="pet-manager"] .pm-script-actions button { min-height: 44px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 14px; font-weight: 900; border: 1px solid rgba(37, 99, 235, 0.32); background: linear-gradient(180deg, #3b96ff, #176df2); color: #fff; box-shadow: 0 14px 28px rgba(37, 99, 235, 0.18), inset 0 1px 0 rgba(255,255,255,0.38); }
+    body[data-openpets-view="pet-manager"] .pm-script-actions button.secondary { background: rgba(255,255,255,0.76); color: #176df2; border-color: rgba(37, 99, 235, 0.42); box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 8px 18px rgba(61, 99, 160, 0.08); }
+    body[data-openpets-view="pet-manager"] .pm-script-actions button:hover:not(:disabled) { transform: translateY(-1px); }
+    body[data-openpets-view="pet-manager"] .pm-script-actions button.secondary:hover:not(:disabled) { background: #eff6ff; }
+    body[data-openpets-view="pet-manager"] .pm-script-actions button:disabled { opacity: 1; cursor: default; background: linear-gradient(180deg, #ecf5ff, #dbeafe); color: #176df2; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9); }
     body[data-openpets-view="pet-manager"] .pm-detail-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.88fr); gap: 16px; }
     body[data-openpets-view="pet-manager"] .pm-detail-actions button { min-height: 50px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 16px; font-weight: 950; border: 1px solid rgba(37, 99, 235, 0.32); background: linear-gradient(180deg, #3b96ff, #176df2); color: #fff; box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24), inset 0 1px 0 rgba(255,255,255,0.38); }
     body[data-openpets-view="pet-manager"] .pm-button-icon { flex: 0 0 auto; width: 16px; height: 16px; stroke: currentColor; }
@@ -1216,7 +1240,7 @@ function createTaskWindowStyles(): string {
     @keyframes pm-sprite-happy { from { background-position: 0 50%; } to { background-position: 71.428% 50%; } }
     @media (prefers-reduced-motion: reduce) { body[data-openpets-view="pet-manager"] .pm-detail-pane, body[data-openpets-view="pet-manager"] .pm-preview-sprite, body[data-openpets-view="pet-manager"] .pm-sprite-frame.pm-animate-sprite { animation: none; } body[data-openpets-view="pet-manager"] .pm-pet-card, body[data-openpets-view="pet-manager"] .pm-pet-card:hover, body[data-openpets-view="pet-manager"] .pm-pet-card:active { transform: none; transition: none; } }
     @media (max-width: 860px) { body[data-openpets-view="pet-manager"] { overflow: auto; } body[data-openpets-view="pet-manager"] .pm-shell { height: auto; min-height: calc(100vh - 36px); grid-template-columns: 1fr; overflow: visible; } body[data-openpets-view="pet-manager"] .pm-gallery-pane, body[data-openpets-view="pet-manager"] .pm-pet-grid { overflow: visible; } body[data-openpets-view="pet-manager"] .pm-detail-pane { height: auto; overflow: visible; } }
-    @media (max-width: 620px) { body[data-openpets-view="pet-manager"] .pm-pet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } body[data-openpets-view="pet-manager"] .pm-detail-actions, body[data-openpets-view="pet-manager"] .pm-mini-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 620px) { body[data-openpets-view="pet-manager"] .pm-pet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } body[data-openpets-view="pet-manager"] .pm-detail-actions, body[data-openpets-view="pet-manager"] .pm-mini-grid, body[data-openpets-view="pet-manager"] .pm-script-grid, body[data-openpets-view="pet-manager"] .pm-script-actions, body[data-openpets-view="pet-manager"] .pm-script-interval-grid { grid-template-columns: 1fr; } }
     
     body[data-openpets-view="onboarding"] { overflow: auto; background: radial-gradient(circle at 85% 10%, rgba(191, 219, 254, 0.72), transparent 24%), linear-gradient(180deg, #f8fbff 0%, #eef7ff 58%, #e8f2ff 100%); color: #10244a; }
     body[data-openpets-view="onboarding"] main { padding: 24px 0 28px; }
@@ -1295,7 +1319,7 @@ function assertAllowedSender(event: IpcMainInvokeEvent, allowedKinds: readonly T
   const actualKind = getTaskWindowKindForWebContents(event.sender.id);
 
   if (!actualKind || !allowedKinds.includes(actualKind)) {
-    throw new Error("OpenPets internal UI request came from an unexpected window.");
+    throw new Error("Internal UI request came from an unexpected window.");
   }
 }
 

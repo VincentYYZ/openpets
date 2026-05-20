@@ -1,5 +1,10 @@
 import type { OpenPetsReaction } from "./local-ipc-protocol.js";
 
+ export type ReactionMessageOverrides = Partial<Record<OpenPetsReaction, readonly string[]>>;
+
+ export const maxReactionMessageLength = 36;
+ export const maxReactionMessagesPerReaction = 24;
+
 export const reactionMessagePools = {
   idle: [
     "Ready",
@@ -157,7 +162,72 @@ export const reactionMessagePools = {
   ],
 } as const satisfies Record<OpenPetsReaction, readonly string[]>;
 
-export function pickReactionMessage(reaction: OpenPetsReaction, random: () => number = Math.random): string {
-  const pool = reactionMessagePools[reaction];
-  return pool[Math.floor(random() * pool.length) % pool.length] ?? reaction;
+export function normalizeReactionMessageOverrides(value: unknown): ReactionMessageOverrides | undefined {
+  if (!isRecord(value)) return undefined;
+  const overrides: Partial<Record<OpenPetsReaction, readonly string[]>> = {};
+  for (const [reaction, messages] of Object.entries(value)) {
+    if (!isAllowedReaction(reaction)) continue;
+    const normalized = normalizeReactionMessages(messages);
+    if (normalized && normalized.length > 0) overrides[reaction] = normalized;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+export function validateReactionMessageOverrides(value: unknown): ReactionMessageOverrides | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("Invalid reaction message overrides.");
+  for (const [reaction, messages] of Object.entries(value)) {
+    if (!isAllowedReaction(reaction)) throw new Error("Invalid reaction message reaction.");
+    validateReactionMessages(messages);
+  }
+  return normalizeReactionMessageOverrides(value);
+}
+
+export function pickReactionMessage(reaction: OpenPetsReaction, random?: () => number): string;
+export function pickReactionMessage(reaction: OpenPetsReaction, overrides?: ReactionMessageOverrides, random?: () => number): string;
+export function pickReactionMessage(reaction: OpenPetsReaction, overridesOrRandom?: ReactionMessageOverrides | (() => number), random: () => number = Math.random): string {
+  const overrides = typeof overridesOrRandom === "function" ? undefined : overridesOrRandom;
+  const picker = typeof overridesOrRandom === "function" ? overridesOrRandom : random;
+  const pool = getReactionMessagePool(reaction, overrides);
+  if (pool.length === 0) return reaction;
+  const value = picker();
+  const index = Math.floor(value * pool.length) % pool.length;
+  if (!Number.isFinite(index)) return pool[0] ?? reaction;
+  const normalizedIndex = index < 0 ? (index + pool.length) % pool.length : index;
+  return pool[normalizedIndex] ?? reaction;
+}
+
+function getReactionMessagePool(reaction: OpenPetsReaction, overrides: ReactionMessageOverrides | undefined): readonly string[] {
+  const custom = overrides?.[reaction];
+  return custom && custom.length > 0 ? custom : reactionMessagePools[reaction];
+}
+
+function validateReactionMessages(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) throw new Error("Invalid reaction message list.");
+  return normalizeReactionMessages(value);
+}
+
+function normalizeReactionMessages(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") throw new Error("Invalid reaction message entry.");
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > maxReactionMessageLength || /[\r\n]/.test(trimmed)) throw new Error("Invalid reaction message entry.");
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+    if (normalized.length >= maxReactionMessagesPerReaction) break;
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isAllowedReaction(value: string): value is OpenPetsReaction {
+  return Object.hasOwn(reactionMessagePools, value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

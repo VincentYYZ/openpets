@@ -12,6 +12,7 @@ files:
   - dist/**
   - preload.cjs
   - pet-preload.cjs
+  - pet-help-preload.cjs
   - assets/**
   - package.json
 

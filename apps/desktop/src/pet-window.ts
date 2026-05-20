@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, screen, type IpcMainEvent } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, screen, type IpcMainEvent, type MenuItemConstructorOptions } from "electron";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,7 @@ import { clampToPrimaryWorkArea, defaultPetWindowSize, getDefaultPetInitialPosit
 import { builtInPet } from "./built-in-pet.js";
 import { getInstalledPetDir } from "./pet-paths.js";
 import type { OpenPetsReaction } from "./local-ipc-protocol.js";
-import { pickReactionMessage } from "./reaction-messages.js";
+import { pickReactionMessage, type ReactionMessageOverrides } from "./reaction-messages.js";
 import { debug, error as logError, info } from "./logger.js";
 import { defaultPetSprite, motionToSpriteState, resolveReactionSpriteState, type PetMotionState, type UniversalSpriteState } from "./reaction-animation-mapping.js";
 
@@ -21,6 +21,8 @@ export interface DefaultPetWindowOptions {
   readonly reactionState?: UniversalSpriteState;
   readonly onPositionChanged: (position: Point) => void;
   readonly onHideRequested: () => void;
+  readonly onHelpRequested?: (anchorBounds: Electron.Rectangle) => void;
+  readonly onInteractiveChanged?: (interactive: boolean, source?: string) => void;
   readonly onDragStarted?: () => void;
   readonly onDragEnded?: () => void;
   readonly onFolderDragEntered?: () => void;
@@ -44,6 +46,7 @@ export interface PetTransientDisplay {
   readonly reaction?: OpenPetsReaction;
   readonly message?: string;
   readonly reactionMessage?: string;
+  readonly passive?: boolean;
   readonly dismissToken?: string;
 }
 
@@ -63,12 +66,21 @@ const petWindowReactionStateCache = new WeakMap<BrowserWindow, UniversalSpriteSt
 
 const windowLoadChains = new WeakMap<BrowserWindow, Promise<void>>();
 const windowLoadSequences = new WeakMap<BrowserWindow, number>();
+const petDropZonePadding = Object.freeze({ top: 24, right: 24, bottom: 24, left: 24 });
+const outerPetWindowSize = Object.freeze({
+  width: defaultPetWindowSize.width + petDropZonePadding.left + petDropZonePadding.right,
+  height: defaultPetWindowSize.height + petDropZonePadding.top + petDropZonePadding.bottom,
+});
 
 export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismissToken?: string): BrowserWindow {
   const window = createBasePetWindow("OpenPets — Default Pet", options.position);
   info("pet.window", "default window create", { windowId: window.id, position: options.position, paused: options.paused, hasDisplay: Boolean(options.display), badge: options.badge });
-  installMousePassthroughAndDrag(window, options.onBubbleDismissed, options.onDragStarted, options.onDragEnded, options.onFolderDragEntered, options.onFolderDragLeft, options.onFolderDropped);
-  installPetContextMenu(window, { label: "Hide pet", click: options.onHideRequested });
+  installMousePassthroughAndDrag(window, options.onBubbleDismissed, options.onDragStarted, options.onDragEnded, options.onFolderDragEntered, options.onFolderDragLeft, options.onFolderDropped, options.onInteractiveChanged);
+  installPetContextMenu(window, [
+    { label: "向宠物求助", click: () => options.onHelpRequested?.(window.getBounds()) },
+    { type: "separator" },
+    { label: "Hide pet", click: options.onHideRequested },
+  ]);
 
   const savePosition = debounce(() => {
     if (window.isDestroyed()) {
@@ -95,17 +107,17 @@ export function createAgentPetWindow(options: AgentPetWindowOptions, dismissToke
   info("pet.window", "agent window create", { windowId: window.id, petId: options.petId, displayName: options.displayName, position: options.position, hasDisplay: Boolean(options.display), badge: options.badge });
   installMousePassthroughAndDrag(window, options.onBubbleDismissed);
   installMotionStatePublisher(window);
-  installPetContextMenu(window, { label: "Close pet", click: options.onCloseRequested });
+  installPetContextMenu(window, [{ label: "Close pet", click: options.onCloseRequested }]);
   void loadExplicitPetContent(window, options.petId, options.display, options.badge, dismissToken, options.scale);
   return window;
 }
 
-function installPetContextMenu(window: BrowserWindow, action: { readonly label: string; readonly click: () => void }): void {
+function installPetContextMenu(window: BrowserWindow, template: readonly MenuItemConstructorOptions[]): void {
   const webContents = window.webContents;
   const handleContextMenu = (event: Electron.Event): void => {
     event.preventDefault();
     if (window.isDestroyed()) return;
-    Menu.buildFromTemplate([{ label: action.label, click: action.click }]).popup({ window });
+    Menu.buildFromTemplate([...template]).popup({ window });
   };
   webContents.on("context-menu", handleContextMenu);
   window.once("closed", () => {
@@ -113,7 +125,7 @@ function installPetContextMenu(window: BrowserWindow, action: { readonly label: 
   });
 }
 
-function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed?: (dismissToken: string) => void, onDragStarted?: () => void, onDragEnded?: () => void, onFolderDragEntered?: () => void, onFolderDragLeft?: () => void, onFolderDropped?: (paths: readonly string[]) => void): void {
+function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed?: (dismissToken: string) => void, onDragStarted?: () => void, onDragEnded?: () => void, onFolderDragEntered?: () => void, onFolderDragLeft?: () => void, onFolderDropped?: (paths: readonly string[]) => void, onInteractiveChanged?: (interactive: boolean, source?: string) => void): void {
   let dragging: { readonly startScreenX: number; readonly startScreenY: number; readonly startWindowX: number; readonly startWindowY: number } | null = null;
   let rendererReady = false;
   let listenersRemoved = false;
@@ -142,6 +154,12 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
   const clearRearmTimers = (): void => {
     for (const timer of rearmTimers) clearTimeout(timer);
     rearmTimers.clear();
+  };
+
+  const updateInteractiveState = (interactive: boolean, source?: string): void => {
+    if (lastInteractive === interactive) return;
+    lastInteractive = interactive;
+    onInteractiveChanged?.(interactive, source);
   };
 
   const getCursorProbe = (): { readonly inside: boolean; readonly cursor: Point; readonly bounds: Electron.Rectangle; readonly clientX: number; readonly clientY: number } => {
@@ -206,7 +224,7 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
   const handleHitTest = (event: IpcMainEvent, interactive: unknown, source: unknown): void => {
     if (!isFromWindow(event)) return;
     rendererReady = true;
-    lastInteractive = Boolean(interactive);
+    updateInteractiveState(Boolean(interactive), typeof source === "string" ? source : undefined);
     debug("pet.window", "hit test", { windowId, interactive: lastInteractive, dragging, source: typeof source === "string" ? source : undefined });
     setPassthrough(!lastInteractive && !dragging);
   };
@@ -263,10 +281,16 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
     onFolderDropped?.(droppedPaths);
   };
 
+  const resetInteractiveStateIfCursorOutside = (source: string): void => {
+    if (window.isDestroyed()) return;
+    if (getCursorProbe().inside) return;
+    updateInteractiveState(false, source);
+  };
+
   const resetForNavigation = (): void => {
     dragging = null;
     rendererReady = false;
-    lastInteractive = false;
+    resetInteractiveStateIfCursorOutside("navigation");
     clearRearmTimers();
     debug("pet.window", "navigation reset passthrough", { windowId });
     setPassthrough(false);
@@ -274,7 +298,7 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
 
   const rearmAfterLoad = (): void => {
     dragging = null;
-    lastInteractive = false;
+    resetInteractiveStateIfCursorOutside("load");
     debug("pet.window", "load rearm passthrough", { windowId });
     rearmPassthroughAfterLoad();
   };
@@ -285,7 +309,7 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
 
   const handleLoadFailure = (): void => {
     dragging = null;
-    lastInteractive = false;
+    resetInteractiveStateIfCursorOutside("load-failure");
     debug("pet.window", "load failure rearm passthrough", { windowId });
     setPassthrough(true);
   };
@@ -334,13 +358,28 @@ function isScreenPoint(value: unknown): value is { readonly screenX: number; rea
   return typeof value === "object" && value !== null && typeof (value as { readonly screenX?: unknown }).screenX === "number" && typeof (value as { readonly screenY?: unknown }).screenY === "number";
 }
 
+function toOuterPetWindowPosition(position: Point): Point {
+  return {
+    x: Math.round(position.x - petDropZonePadding.left),
+    y: Math.round(position.y - petDropZonePadding.top),
+  };
+}
+
+function toInnerPetWindowPosition(position: Point): Point {
+  return {
+    x: Math.round(position.x + petDropZonePadding.left),
+    y: Math.round(position.y + petDropZonePadding.top),
+  };
+}
+
 function createBasePetWindow(title: string, position: Point): BrowserWindow {
+  const outerPosition = toOuterPetWindowPosition(position);
   const window = new BrowserWindow({
     title,
-    width: defaultPetWindowSize.width,
-    height: defaultPetWindowSize.height,
-    x: position.x,
-    y: position.y,
+    width: outerPetWindowSize.width,
+    height: outerPetWindowSize.height,
+    x: outerPosition.x,
+    y: outerPosition.y,
     frame: false,
     transparent: true,
     resizable: false,
@@ -427,7 +466,7 @@ export async function loadExplicitPetContent(window: BrowserWindow, petId: strin
     }
     debug("pet.window", "explicit content render begin", { windowId: window.id, sequence, petId, displayName: pet.displayName, hasDisplay: Boolean(display), reaction: display?.reaction, hasMessage: Boolean(display?.message), badge });
     const scale = scaleOverride ?? state.preferences.petScale as PetScaleValue;
-    const render = await createInstalledPetRender(pet.id, pet.displayName, false, display, scale, badge, `explicit:${pet.id}`, dismissToken);
+    const render = await createInstalledPetRender(pet.id, pet.displayName, false, display, scale, badge, `explicit:${pet.id}`, dismissToken, "idle", undefined, pet.reactionMessageOverrides);
     if (tryUpdateLoadedPetContent(window, render, `explicit-${pet.id}`, sequence)) return;
     await loadPetHtmlFile(window, render.html, `explicit-${pet.id}`, sequence);
     petWindowRenderCache.set(window, render.cacheKey);
@@ -437,13 +476,13 @@ export async function loadExplicitPetContent(window: BrowserWindow, petId: strin
   }
 }
 
-export function preparePetTransientDisplay(display: PetTransientDisplay): PetTransientDisplay {
+export function preparePetTransientDisplay(display: PetTransientDisplay, reactionMessageOverrides?: ReactionMessageOverrides): PetTransientDisplay {
   if (!display.reaction || display.message || display.reactionMessage) return display;
-  return { ...display, reactionMessage: pickReactionMessage(display.reaction) };
+  return { ...display, reactionMessage: pickReactionMessage(display.reaction, reactionMessageOverrides) };
 }
 
-export function mergePetTransientDisplay(current: PetTransientDisplay | null, next: PetTransientDisplay): PetTransientDisplay {
-  if (next.message || !next.reaction || !current?.message) return preparePetTransientDisplay(next);
+export function mergePetTransientDisplay(current: PetTransientDisplay | null, next: PetTransientDisplay, reactionMessageOverrides?: ReactionMessageOverrides): PetTransientDisplay {
+  if (next.message || next.reactionMessage || !next.reaction || !current?.message || current.passive) return preparePetTransientDisplay(next, reactionMessageOverrides);
   return { ...current, reaction: next.reaction, dismissToken: next.dismissToken ?? current.dismissToken };
 }
 
@@ -498,9 +537,15 @@ export function getSafeDefaultPetPosition(position: Point | undefined): Point {
   return clampToPrimaryWorkArea(position ?? getDefaultPetInitialPosition(), defaultPetWindowSize);
 }
 
+export function setPetWindowPosition(window: BrowserWindow, position: Point, animate = false): void {
+  if (window.isDestroyed()) return;
+  const outerPosition = toOuterPetWindowPosition(position);
+  window.setPosition(outerPosition.x, outerPosition.y, animate);
+}
+
 export function readWindowPosition(window: BrowserWindow): Point {
   const [x, y] = window.getPosition();
-  return clampToPrimaryWorkArea({ x, y }, defaultPetWindowSize);
+  return clampToPrimaryWorkArea(toInnerPetWindowPosition({ x, y }), defaultPetWindowSize);
 }
 
 async function createDefaultPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender> {
@@ -510,7 +555,7 @@ async function createDefaultPetRender(paused: boolean, display: PetTransientDisp
   }
 
   const spriteUrl = pathToFileURL(join(app.getAppPath(), "assets", defaultPetSprite.fileName)).toString();
-  const bodyHtml = createPetBodyMarkup("OpenPets default pet", createBubbleMarkup(display, paused, badge, dismissToken), `<div class="sprite" role="img" aria-label="Claude animated default pet"></div>`);
+  const bodyHtml = createPetBodyMarkup("OpenPets default pet", createBubbleMarkup(display, paused, badge, dismissToken, getBuiltInPetReactionMessageOverrides()), `<div class="sprite" role="img" aria-label="Claude animated default pet"></div>`);
   const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
   const scale = getAppStateSnapshot().preferences.petScale as PetScaleValue;
@@ -568,7 +613,7 @@ async function tryCreateInstalledPetRender(paused: boolean, display: PetTransien
   }
 
   try {
-    return await createInstalledPetRender(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge, `default:${selected.id}`, dismissToken, motionState, reactionStateOverride);
+    return await createInstalledPetRender(selected.id, selected.displayName, paused, display, state.preferences.petScale as PetScaleValue, badge, `default:${selected.id}`, dismissToken, motionState, reactionStateOverride, selected.reactionMessageOverrides);
   } catch (error) {
     console.error(`Failed to render installed default pet ${selected.id}; falling back to built-in pet.`, error);
     try {
@@ -580,15 +625,15 @@ async function tryCreateInstalledPetRender(paused: boolean, display: PetTransien
   }
 }
 
-async function createInstalledPetRender(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null, cachePrefix: string, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender> {
+async function createInstalledPetRender(petId: string, displayName: string, paused: boolean, display: PetTransientDisplay | null, scale: PetScaleValue, badge: PetStatusBadgeReaction | null, cachePrefix: string, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState, reactionMessageOverrides?: ReactionMessageOverrides): Promise<PetContentRender> {
   const spritesheetPath = join(getInstalledPetDir(petId), "spritesheet.webp");
   const spritesheet = await stat(spritesheetPath);
   if (!spritesheet.isFile() || spritesheet.size <= 0 || spritesheet.size > 100 * 1024 * 1024) {
-    throw new Error("Installed pet spritesheet is missing or too large.");
+    throw new Error(`Missing or invalid spritesheet for pet: ${petId}`);
   }
 
   const imageUrl = pathToFileURL(spritesheetPath).toString();
-  const bodyHtml = createPetBodyMarkup(escapeHtml(displayName), createBubbleMarkup(display, paused, badge, dismissToken), `<div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}"><div class="installed-sprite"></div></div>`);
+  const bodyHtml = createPetBodyMarkup(escapeHtml(displayName), createBubbleMarkup(display, paused, badge, dismissToken, reactionMessageOverrides), `<div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}"><div class="installed-sprite"></div></div>`);
   const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
 
@@ -642,9 +687,12 @@ async function createInstalledPetRender(petId: string, displayName: string, paus
 
 function createPetBodyMarkup(stageLabel: string, bubble: string, spriteMarkup: string): string {
   return `<div class="stage" aria-label="${stageLabel}">
-    ${bubble}
-    <div class="pet-shell">
-      ${spriteMarkup}
+    <div class="drop-zone" aria-hidden="true"></div>
+    <div class="pet-frame">
+      ${bubble}
+      <div class="pet-shell">
+        ${spriteMarkup}
+      </div>
     </div>
   </div>`;
 }
@@ -664,6 +712,8 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
     html { color: #172033; }
     body { -webkit-app-region: no-drag; pointer-events: none; }
     .stage { width: 100%; height: 100%; position: relative; box-sizing: border-box; overflow: visible; }
+    .drop-zone { position: absolute; inset: 0; z-index: 0; display: block; background: transparent; pointer-events: auto; -webkit-app-region: no-drag; }
+    .pet-frame { position: absolute; left: ${petDropZonePadding.left}px; top: ${petDropZonePadding.top}px; width: ${defaultPetWindowSize.width}px; height: ${defaultPetWindowSize.height}px; box-sizing: border-box; overflow: visible; pointer-events: none; }
     .pet-shell { position: absolute; left: 50%; bottom: ${petBottom}px; z-index: 1; width: ${scaledWidth}px; height: ${scaledHeight}px; display: block; opacity: var(--pet-opacity); filter: ${petShellFilter}; transform: translateX(-50%); transition-property: opacity, filter; transition-duration: 180ms; transition-timing-function: cubic-bezier(0.2, 0, 0, 1); pointer-events: auto; -webkit-app-region: no-drag; cursor: grab; }
     .bubble { position: absolute; left: 50%; bottom: ${bubbleBottom}px; z-index: 4; box-sizing: border-box; display: inline-flex; flex-direction: column; width: fit-content; min-width: 92px; max-width: min(220px, calc(100vw - 18px)); max-height: 128px; padding: 10px 12px; background: linear-gradient(135deg, rgba(239, 246, 255, 0.97), rgba(237, 233, 254, 0.96)); color: #172033; font: 760 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 14px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16), 0 2px 5px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82); white-space: normal; overflow-wrap: break-word; word-break: normal; overflow: visible; pointer-events: auto; -webkit-app-region: no-drag; opacity: 1; backdrop-filter: ${bubbleBackdropFilter}; transform: translateX(-50%); transform-origin: 64% 100%; animation: bubble-in 180ms cubic-bezier(0.2, 0, 0, 1); }
     .bubble[data-dismiss-token] { cursor: pointer; }
@@ -713,8 +763,12 @@ function getReactionSpriteState(reaction: OpenPetsReaction | undefined): Univers
   return resolveReactionSpriteState(reaction, getAppStateSnapshot().preferences.reactionAnimationOverrides);
 }
 
-function createBubbleMarkup(display: PetTransientDisplay | null, paused: boolean, badgeReaction: PetStatusBadgeReaction | null, dismissToken?: string): string {
-  const text = display?.message ?? display?.reactionMessage ?? (display?.reaction ? pickReactionMessage(display.reaction) : undefined) ?? (paused ? "Paused" : "");
+function getBuiltInPetReactionMessageOverrides(): ReactionMessageOverrides | undefined {
+  return getAppStateSnapshot().pets.installed.find((pet) => pet.id === builtInPet.id)?.reactionMessageOverrides;
+}
+
+function createBubbleMarkup(display: PetTransientDisplay | null, paused: boolean, badgeReaction: PetStatusBadgeReaction | null, dismissToken?: string, reactionMessageOverrides?: ReactionMessageOverrides): string {
+  const text = display?.message ?? display?.reactionMessage ?? (display?.reaction ? pickReactionMessage(display.reaction, reactionMessageOverrides) : undefined) ?? (paused ? "Paused" : "");
   const status = !paused && badgeReaction ? getStatusBadge(badgeReaction) : null;
   if (!text && !status) return "";
   const isExplicitMessage = Boolean(display?.message && !display?.reactionMessage);

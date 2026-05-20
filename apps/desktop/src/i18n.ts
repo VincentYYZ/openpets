@@ -26,45 +26,45 @@ interface TrayCopy {
 const taskWindowDefinitionsByLanguage: Record<AppLanguage, Record<"pet-manager" | "agent-setup" | "settings" | "onboarding", TaskWindowDefinition>> = {
   en: {
     "pet-manager": {
-      title: "OpenPets — Pet Manager",
+      title: "Pet Manager",
       heading: "Manage Pets",
       description: "Install pets from the validated catalog, switch your active companion, and manage local pets.",
     },
     "agent-setup": {
-      title: "OpenPets — Integrations",
+      title: "Integrations",
       heading: "Integrations",
-      description: "Connect OpenPets to coding tools with explicit confirmation.",
+      description: "Connect to coding tools with explicit confirmation.",
     },
     settings: {
-      title: "OpenPets — Settings",
+      title: "Settings",
       heading: "Settings",
-      description: "Tune how OpenPets starts and resets your desktop companion.",
+      description: "Tune how the app starts and resets your desktop companion.",
     },
     onboarding: {
-      title: "OpenPets — Welcome",
-      heading: "Welcome to OpenPets",
+      title: "Welcome",
+      heading: "Welcome",
       description: "Set up your pets and coding-agent integrations, or skip anything and come back later from the tray.",
     },
   },
   "zh-CN": {
     "pet-manager": {
-      title: "OpenPets — 宠物管理",
+      title: "宠物管理",
       heading: "管理宠物",
       description: "从已验证的目录安装宠物，切换当前伙伴，并管理本地宠物。",
     },
     "agent-setup": {
-      title: "OpenPets — 集成",
+      title: "集成",
       heading: "集成",
-      description: "将 OpenPets 与编码工具连接，并在变更前进行明确确认。",
+      description: "连接你的编码工具，并在变更前进行明确确认。",
     },
     settings: {
-      title: "OpenPets — 设置",
+      title: "设置",
       heading: "设置",
-      description: "调整 OpenPets 的启动方式和桌面伙伴行为。",
+      description: "调整应用的启动方式和桌面伙伴行为。",
     },
     onboarding: {
-      title: "OpenPets — 欢迎",
-      heading: "欢迎使用 OpenPets",
+      title: "欢迎",
+      heading: "欢迎",
       description: "设置你的宠物和编码代理集成，也可以先跳过，稍后从托盘继续。",
     },
   },
@@ -72,7 +72,7 @@ const taskWindowDefinitionsByLanguage: Record<AppLanguage, Record<"pet-manager" 
 
 const trayCopyByLanguage: Record<AppLanguage, TrayCopy> = {
   en: {
-    toolTip: "OpenPets",
+    toolTip: "Desktop Pet",
     continueSetup: "Continue Setup...",
     defaultPet: (petName) => `Default Pet: ${petName}`,
     showDefaultPet: "Show Default Pet",
@@ -83,12 +83,12 @@ const trayCopyByLanguage: Record<AppLanguage, TrayCopy> = {
     integrations: "Integrations...",
     settings: "Settings...",
     openLogsFolder: "Open Logs Folder...",
-    quitOpenPets: "Quit OpenPets",
+    quitOpenPets: "Quit",
     updateAvailable: (version) => `Update available: ${version}...`,
     builtInPetName: "Built-in Pet",
   },
   "zh-CN": {
-    toolTip: "OpenPets",
+    toolTip: "桌面宠物",
     continueSetup: "继续设置...",
     defaultPet: (petName) => `默认宠物：${petName}`,
     showDefaultPet: "显示默认宠物",
@@ -99,7 +99,7 @@ const trayCopyByLanguage: Record<AppLanguage, TrayCopy> = {
     integrations: "集成设置...",
     settings: "设置...",
     openLogsFolder: "打开日志文件夹...",
-    quitOpenPets: "退出 OpenPets",
+    quitOpenPets: "退出",
     updateAvailable: (version) => `发现更新：${version}...`,
     builtInPetName: "内置宠物",
   },
