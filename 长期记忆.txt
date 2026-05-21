@@ -1,0 +1,11 @@
+  我建议的落地顺序
+
+  1. 先做 pet-memory-store.ts：本地 JSON 读写、校验、合并、删除
+  2. 在聊天/求助窗口关闭时保存 conversation summary
+  3. 加 pet-memory-extractor.ts：从对话中提取结构化记忆
+  4. 加 pet-memory-context.ts：每次对话前生成短上下文
+  5. 设置页增加记忆管理 UI
+  6. 后续再做 embedding 检索、按项目分组、记忆过期策略
+
+
+  

@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 const api = {
   getState: () => ipcRenderer.invoke("openpets:get-state"),
   getReactionAnimationSettings: () => ipcRenderer.invoke("openpets:get-reaction-animation-settings"),
+  getPetMemory: () => ipcRenderer.invoke("openpets:get-pet-memory"),
+  setPetMemoryEnabled: (enabled) => ipcRenderer.invoke("openpets:set-pet-memory-enabled", enabled),
+  deletePetMemoryFact: (id) => ipcRenderer.invoke("openpets:delete-pet-memory-fact", id),
+  clearPetMemory: () => ipcRenderer.invoke("openpets:clear-pet-memory"),
   getCatalog: () => ipcRenderer.invoke("openpets:get-catalog"),
   getCatalogPage: (page) => ipcRenderer.invoke("openpets:get-catalog-page", page),
   getCatalogSearch: () => ipcRenderer.invoke("openpets:get-catalog-search"),
@@ -134,7 +138,33 @@ const zhCnExactText = Object.freeze({
   "Start automatically when you sign in.": "登录系统时自动启动。",
   "Pet": "宠物",
   "Desktop pet controls": "桌面宠物控制",
+  "Memory": "记忆",
+  "Local long-term memory": "本地长期记忆",
+  "Enable local memory": "启用本地记忆",
+  "Summarizes pet help conversations into local facts used in future replies.": "将宠物求助对话整理成本地事实，用于后续回答。",
+  "Memory storage": "记忆存储",
+  "Loading memory path…": "正在加载记忆路径…",
+  "Clear memory": "清空记忆",
+  "No saved memories yet.": "暂时没有保存的记忆。",
+  "Local memory is disabled.": "本地记忆已关闭。",
+  "Memory enabled.": "记忆已启用。",
+  "Memory disabled.": "记忆已关闭。",
+  "Memory cleared.": "记忆已清空。",
+  "Memory deleted.": "记忆已删除。",
+  "Couldn’t update memory setting. Try again.": "无法更新记忆设置，请重试。",
+  "Couldn’t clear memory. Try again.": "无法清空记忆，请重试。",
+  "Couldn’t delete memory. Try again.": "无法删除记忆，请重试。",
+  "Delete": "删除",
+  "Profile": "资料",
+  "Preference": "偏好",
+  "Project": "项目",
+  "Persona": "性格",
+  "Workflow": "工作流",
+  "Constraint": "约束",
   "Pet scale": "宠物大小",
+  "Pet walking speed": "宠物移动速度",
+  "Normal": "正常",
+  "Tiny": "微型",
   "Small": "小",
   "Medium": "中",
   "Large": "大",
@@ -178,10 +208,12 @@ const zhCnExactText = Object.freeze({
   "Launch at login preference saved.": "登录启动偏好已保存。",
   "Couldn’t update launch at login. Try again.": "无法更新登录启动设置，请重试。",
   "Saving scale…": "正在保存大小…",
+  "Saving walking speed…": "正在保存移动速度…",
   "Saving language…": "正在保存语言…",
   "Language preference saved.": "语言偏好已保存。",
   "Couldn’t save language. Try again.": "无法保存语言，请重试。",
   "Couldn’t save pet scale. Try again.": "无法保存宠物大小，请重试。",
+  "Couldn’t save walking speed. Try again.": "无法保存移动速度，请重试。",
   "Saving…": "保存中…",
   "Refreshing…": "刷新中…",
   "Replacing…": "替换中…",
@@ -335,9 +367,9 @@ function translateUiText(value, language = getCurrentDocumentLanguage()) {
   if (match) return `当前已安装：${match[1]}。最新公开版本：${match[2]}。`;
   match = value.match(/^(.+) animation saved\.$/u);
   if (match) return `${translateUiText(match[1], language)} 动画已保存。`;
-  match = value.match(/^(Small|Medium|Large|Custom) \(([^)]+)\)$/u);
+  match = value.match(/^(Tiny|Small|Medium|Large|Custom) \(([^)]+)\)$/u);
   if (match) return `${translateUiText(match[1], language)}（${match[2]}）`;
-  match = value.match(/^(Small|Medium|Large|Custom) pet scale saved\.$/u);
+  match = value.match(/^(Tiny|Small|Medium|Large|Custom) pet scale saved\.$/u);
   if (match) return `${translateUiText(match[1], language)}尺寸已保存。`;
   return value;
 }
@@ -1948,21 +1980,28 @@ function renderSettings(state) {
   const launchAtLoginDetail = requireElement("launch-at-login-detail");
   const scaleSelect = requireSelect("pet-scale");
   const scale = requireElement("pet-scale-value");
+  const walkSpeedInput = requireInput("pet-walk-speed");
+  const walkSpeedValue = requireElement("pet-walk-speed-value");
   const status = requireElement("settings-status");
 
   languageSelect.value = state.preferences.language;
   openOnLaunch.checked = state.preferences.openDefaultPetOnLaunch;
   scaleSelect.value = String(state.preferences.petScale);
+  walkSpeedInput.value = String(state.preferences.petWalkSpeed);
   languageSelect.disabled = false;
   openOnLaunch.disabled = false;
   scaleSelect.disabled = false;
+  walkSpeedInput.disabled = false;
   scale.textContent = `${scaleLabelFor(state.preferences.petScale)} (${state.preferences.petScale}x)`;
+  walkSpeedValue.textContent = walkSpeedLabelFor(state.preferences.petWalkSpeed);
 
   bindLanguageSelect(languageSelect, state.preferences.language);
   bindCheckbox(openOnLaunch, "openDefaultPetOnLaunch", "Launch preference saved.");
   bindScaleSelect(scaleSelect, String(state.preferences.petScale));
+  bindWalkSpeedSlider(walkSpeedInput, walkSpeedValue, state.preferences.petWalkSpeed);
   bindLaunchAtLogin(launchAtLogin, launchAtLoginDetail);
   bindUpdateControls();
+  void renderPetMemorySettings().catch(renderCaughtError);
   void renderReactionAnimationSettings().catch(renderCaughtError);
 
   const resetButton = requireButton("reset-default-pet-position");
@@ -1982,6 +2021,114 @@ function renderSettings(state) {
   };
 
   localizeDocument(state.preferences.language);
+}
+
+async function renderPetMemorySettings() {
+  const snapshot = await api.getPetMemory();
+  if (!isPetMemorySnapshot(snapshot)) {
+    throw new Error("Pet memory is unavailable.");
+  }
+
+  const enabled = requireInput("pet-memory-enabled");
+  const clearButton = requireButton("clear-pet-memory");
+  const path = requireElement("pet-memory-path");
+  const list = requireElement("pet-memory-list");
+  enabled.checked = snapshot.enabled;
+  enabled.disabled = false;
+  clearButton.disabled = snapshot.facts.length === 0 && snapshot.conversations.length === 0;
+  path.textContent = snapshot.storagePath;
+  list.textContent = "";
+
+  if (!snapshot.enabled) {
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = "Local memory is disabled.";
+    list.append(empty);
+  } else if (snapshot.facts.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = "No saved memories yet.";
+    list.append(empty);
+  } else {
+    for (const fact of snapshot.facts.slice(0, 12)) {
+      list.append(createMemoryItem(fact));
+    }
+  }
+
+  enabled.onchange = () => {
+    const previous = !enabled.checked;
+    enabled.disabled = true;
+    const status = requireElement("settings-status");
+    void api.setPetMemoryEnabled(enabled.checked).then(async () => {
+      await renderPetMemorySettings();
+      status.textContent = enabled.checked ? "Memory enabled." : "Memory disabled.";
+      localizeDocument();
+    }).catch((error) => {
+      enabled.checked = previous;
+      enabled.disabled = false;
+      status.textContent = "Couldn’t update memory setting. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+
+  clearButton.onclick = () => {
+    clearButton.disabled = true;
+    const status = requireElement("settings-status");
+    void api.clearPetMemory().then(async () => {
+      await renderPetMemorySettings();
+      status.textContent = "Memory cleared.";
+      localizeDocument();
+    }).catch((error) => {
+      clearButton.disabled = false;
+      status.textContent = "Couldn’t clear memory. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+
+  localizeDocument();
+}
+
+function createMemoryItem(fact) {
+  const item = document.createElement("article");
+  item.className = "memory-item";
+  const body = document.createElement("div");
+  const kind = document.createElement("strong");
+  kind.textContent = memoryKindLabel(fact.kind);
+  const text = document.createElement("p");
+  text.textContent = fact.text;
+  body.append(kind, text);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.textContent = "Delete";
+  button.onclick = () => {
+    button.disabled = true;
+    const status = requireElement("settings-status");
+    void api.deletePetMemoryFact(fact.id).then(async () => {
+      await renderPetMemorySettings();
+      status.textContent = "Memory deleted.";
+      localizeDocument();
+    }).catch((error) => {
+      button.disabled = false;
+      status.textContent = "Couldn’t delete memory. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+  item.append(body, button);
+  return item;
+}
+
+function memoryKindLabel(kind) {
+  if (kind === "user_profile") return "Profile";
+  if (kind === "user_preference") return "Preference";
+  if (kind === "project_fact") return "Project";
+  if (kind === "pet_persona") return "Persona";
+  if (kind === "workflow") return "Workflow";
+  if (kind === "constraint") return "Constraint";
+  return "Memory";
 }
 
 async function renderReactionAnimationSettings() {
@@ -2269,11 +2416,55 @@ function bindScaleSelect(select, currentValue) {
   };
 }
 
+function bindWalkSpeedSlider(input, valueLabel, currentValue) {
+  let saveTimer = null;
+  const current = Number(currentValue);
+  input.oninput = () => {
+    valueLabel.textContent = walkSpeedLabelFor(Number(input.value));
+    localizeDocument();
+  };
+  input.onchange = () => {
+    const previous = Number.isFinite(current) ? current : 1;
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) {
+      input.value = String(previous);
+      valueLabel.textContent = walkSpeedLabelFor(previous);
+      return;
+    }
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      input.disabled = true;
+      const status = requireElement("settings-status");
+      status.textContent = "Saving walking speed…";
+      localizeDocument();
+      void api.updatePreferences({ petWalkSpeed: value }).then(async () => {
+        await renderCurrentState("settings");
+        requireElement("settings-status").textContent = `Walking speed saved: ${walkSpeedLabelFor(value)}.`;
+        localizeDocument();
+      }).catch((error) => {
+        input.value = String(previous);
+        valueLabel.textContent = walkSpeedLabelFor(previous);
+        input.disabled = false;
+        status.textContent = "Couldn’t save walking speed. Try again.";
+        localizeDocument();
+        renderCaughtError(error);
+      });
+    }, 120);
+  };
+}
+
 function scaleLabelFor(value) {
+  if (value === 0.32) return "Tiny";
   if (value === 0.44) return "Small";
   if (value === 0.56) return "Medium";
   if (value === 0.72) return "Large";
   return "Custom";
+}
+
+function walkSpeedLabelFor(value) {
+  const speed = Number.isFinite(value) ? Math.round(value * 10) / 10 : 1;
+  if (speed === 1) return "Normal";
+  return `${speed.toFixed(1)}x`;
 }
 
 function bindCheckbox(input, key, message) {
@@ -2350,6 +2541,7 @@ function isStateSnapshot(value) {
     && typeof value.preferences.openDefaultPetOnLaunch === "boolean"
     && typeof value.preferences.speechBubblesEnabled === "boolean"
     && typeof value.preferences.petScale === "number"
+    && typeof value.preferences.petWalkSpeed === "number"
     && typeof value.preferences.onboardingCompleted === "boolean";
 }
 
@@ -2377,6 +2569,15 @@ function isReactionAnimationSettingsSnapshot(value) {
     && typeof value.sprite.frameHeight === "number"
     && typeof value.sprite.columns === "number"
     && typeof value.sprite.rows === "number";
+}
+
+function isPetMemorySnapshot(value) {
+  return isRecord(value)
+    && typeof value.enabled === "boolean"
+    && typeof value.storagePath === "string"
+    && typeof value.updatedAt === "string"
+    && Array.isArray(value.facts)
+    && Array.isArray(value.conversations);
 }
 
 function isCatalogUiState(value) {

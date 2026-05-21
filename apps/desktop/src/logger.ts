@@ -4,7 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type LogScope = "app" | "ipc" | "lease" | "pet.default" | "pet.agent" | "pet.window" | "state" | "tray" | "ui";
+export type LogScope = "app" | "ipc" | "lease" | "pet.default" | "pet.agent" | "pet.window" | "pet.reminder" | "pet.memory" | "state" | "tray" | "ui";
 
 type LogFields = Record<string, unknown>;
 
@@ -14,7 +14,7 @@ const maxLogBytes = 2 * 1024 * 1024;
 let configuredLevel: LogLevel = normalizeLogLevel(process.env.OPENPETS_LOG_LEVEL) ?? "debug";
 let logFilePath: string | null = null;
 let previousLogFilePath: string | null = null;
-let mirrorToConsole = isDevRun() || process.env.OPENPETS_LOG_CONSOLE === "1";
+let mirrorToConsole = shouldMirrorToConsole(process.env.OPENPETS_LOG_CONSOLE);
 
 export function initializeLogger(): void {
   try {
@@ -106,6 +106,10 @@ function rotateCurrentLog(currentPath: string, previousPath: string): void {
 function normalizeLogLevel(value: string | undefined): LogLevel | null {
   if (value === "debug" || value === "info" || value === "warn" || value === "error") return value;
   return null;
+}
+
+function shouldMirrorToConsole(value: string | undefined): boolean {
+  return value === "1";
 }
 
 function isDevRun(): boolean {

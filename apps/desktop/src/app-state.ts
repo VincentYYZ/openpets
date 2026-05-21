@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join } from "node:path";
 
 import { app } from "electron";
 
-import { defaultPetScale, markOnboardingCompleted, normalizeOnboardingCompleted, normalizePetScale, petScaleOptions, type PetScaleValue } from "./app-state-core.js";
+import { defaultPetScale, defaultPetWalkSpeed, markOnboardingCompleted, maxPetWalkSpeed, minPetWalkSpeed, normalizeOnboardingCompleted, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, type PetScaleValue } from "./app-state-core.js";
 import { builtInPet } from "./built-in-pet.js";
 import type { Point } from "./display.js";
 import { normalizeAppLanguage, type AppLanguage } from "./i18n.js";
@@ -51,6 +51,7 @@ export interface OpenPetsStateV1 {
     readonly openDefaultPetOnLaunch: boolean;
     readonly speechBubblesEnabled: boolean;
     readonly petScale: number;
+    readonly petWalkSpeed: number;
     readonly reactionAnimationOverrides?: ReactionAnimationOverrides;
     readonly onboardingCompleted: boolean;
     readonly claudeCommandPath?: string;
@@ -65,7 +66,7 @@ export interface OpenPetsStateV1 {
   };
 }
 
-export { defaultPetScale, normalizePetScale, petScaleOptions, type PetScaleValue };
+export { defaultPetScale, defaultPetWalkSpeed, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, type PetScaleValue };
 
 const stateFileName = "openpets-state.json";
 const directInstallLockName = ".install-pet.lock";
@@ -336,6 +337,7 @@ function normalizePreferences(value: Partial<OpenPetsStateV1["preferences"]>): O
       : defaultState.preferences.openDefaultPetOnLaunch,
     speechBubblesEnabled: true,
     petScale: normalizePetScale(value.petScale),
+    petWalkSpeed: normalizePetWalkSpeed(value.petWalkSpeed),
     reactionAnimationOverrides: normalizeReactionAnimationOverrides(value.reactionAnimationOverrides),
     onboardingCompleted: normalizeOnboardingCompleted(value),
     claudeCommandPath: normalizeCommandPath(value.claudeCommandPath),
@@ -421,6 +423,7 @@ function createDefaultState(): OpenPetsStateV1 {
       openDefaultPetOnLaunch: true,
       speechBubblesEnabled: true,
       petScale: defaultPetScale,
+      petWalkSpeed: defaultPetWalkSpeed,
       reactionAnimationOverrides: undefined,
       onboardingCompleted: false,
       claudeCommandPath: undefined,

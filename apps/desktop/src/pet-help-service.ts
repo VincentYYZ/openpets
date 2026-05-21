@@ -4,6 +4,7 @@ import { app } from "electron";
 import { join } from "node:path";
 
 import { getAppStateSnapshot } from "./app-state.js";
+import { buildPetMemoryContext } from "./pet-memory-context.js";
 
 export interface PetHelpTurn {
   readonly role: "user" | "assistant";
@@ -25,15 +26,17 @@ interface CommandResult {
 }
 
 const petHelpTimeoutMs = 120_000;
+const petHelpChatOnlyTimeoutMs = 45_000;
 const maxClaudeOutputBytes = 96_000;
 
 export async function askPetHelpWithClaude(request: PetHelpAskRequest): Promise<{ readonly answer: string }> {
   const prompt = createClaudePetHelpPrompt(request);
   const command = getAppStateSnapshot().preferences.claudeCommandPath || "claude";
+  const chatOnly = shouldUseChatOnlyClaudeMode(request);
   let lastResult: CommandResult | null = null;
 
   for (const candidate of getClaudeCommandCandidates(command)) {
-    const result = await runClaudePrintCommand(candidate, prompt);
+    const result = await runClaudePrintCommand(candidate, prompt, chatOnly);
     lastResult = result;
     if (result.ok) {
       const answer = sanitizeClaudeOutput(result.stdout || result.stderr);
@@ -47,18 +50,21 @@ export async function askPetHelpWithClaude(request: PetHelpAskRequest): Promise<
 
 function createClaudePetHelpPrompt(request: PetHelpAskRequest): string {
   const history = request.history.slice(-8).map((turn) => `${turn.role === "user" ? "用户" : "宠物"}：${turn.content}`).join("\n\n");
+  const memoryContext = buildPetMemoryContext().text;
   return [
     "你是用户桌面宠物背后的 Claude Code 助手。请用简洁、友好、可执行的中文回答。",
     "如果问题与代码、终端、文件或项目有关，请优先给出具体步骤。",
+    memoryContext ? `本地长期记忆：\n${memoryContext}` : "",
     history ? `最近对话：\n${history}` : "",
     `用户现在的问题：\n${request.message}`,
   ].filter(Boolean).join("\n\n");
 }
 
-function runClaudePrintCommand(command: string, prompt: string): Promise<CommandResult> {
+function runClaudePrintCommand(command: string, prompt: string, chatOnly: boolean): Promise<CommandResult> {
   return new Promise((resolve) => {
     const commandLine = process.platform === "win32" && command.toLowerCase().endsWith(".cmd") ? "cmd.exe" : command;
-    const args = process.platform === "win32" && command.toLowerCase().endsWith(".cmd") ? ["/d", "/s", "/c", command, "-p", prompt] : ["-p", prompt];
+    const claudeArgs = createClaudePrintArgs(prompt, chatOnly);
+    const args = process.platform === "win32" && command.toLowerCase().endsWith(".cmd") ? ["/d", "/s", "/c", command, ...claudeArgs] : claudeArgs;
     let child;
     try {
       child = spawn(commandLine, args, { cwd: app.getPath("home"), env: createCommandEnv(), windowsHide: true, shell: false });
@@ -75,7 +81,7 @@ function runClaudePrintCommand(command: string, prompt: string): Promise<Command
       settled = true;
       child.kill();
       resolve({ ok: false, timedOut: true, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), error: "Claude Code 响应超时。" });
-    }, petHelpTimeoutMs);
+    }, chatOnly ? petHelpChatOnlyTimeoutMs : petHelpTimeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => { stdout = appendBounded(stdout, chunk.toString("utf8")); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = appendBounded(stderr, chunk.toString("utf8")); });
@@ -92,6 +98,19 @@ function runClaudePrintCommand(command: string, prompt: string): Promise<Command
       resolve({ ok: code === 0, timedOut: false, exitCode: code, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr) });
     });
   });
+}
+
+function createClaudePrintArgs(prompt: string, chatOnly: boolean): readonly string[] {
+  const baseArgs = ["--output-format", "text", "--no-session-persistence", "-p", prompt];
+  return chatOnly ? ["--tools", "", ...baseArgs] : baseArgs;
+}
+
+function shouldUseChatOnlyClaudeMode(request: PetHelpAskRequest): boolean {
+  const text = `${request.message}\n${request.history.slice(-4).map((turn) => turn.content).join("\n")}`;
+  if (/(代码|项目|仓库|文件|终端|命令|报错|错误|bug|修复|实现|函数|类|接口|TypeScript|JavaScript|Electron|pnpm|npm|git|PowerShell|Windows|macOS|路径|目录|构建|打包|测试|日志|配置|API|JSON|IPC|MCP|Claude Code|OpenPets)/i.test(text)) {
+    return false;
+  }
+  return true;
 }
 
 function getClaudeCommandCandidates(command: string): readonly string[] {

@@ -5,6 +5,26 @@ import { tmpdir } from "node:os";
 
 import { ensureImportLine, ensureManagedImport, installClaudeOpenPetsMemory, openPetsClaudeImportLine, removeImportLine, removeOpenPetsMemoryBlock, uninstallClaudeOpenPetsMemory, upsertOpenPetsMemoryBlock } from "./claude-memory.js";
 
+function canCreateTestSymlink(targetPath: string, linkPath: string, type?: Parameters<typeof symlinkSync>[2]): boolean {
+  try {
+    symlinkSync(targetPath, linkPath, type);
+    return true;
+  } catch (error: unknown) {
+    if (isWindowsSymlinkPermissionError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function isWindowsSymlinkPermissionError(error: unknown): boolean {
+  return process.platform === "win32"
+    && typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "EPERM";
+}
+
 assert.equal(ensureImportLine("", openPetsClaudeImportLine), `${openPetsClaudeImportLine}\n`);
 assert.equal(ensureImportLine("# User notes\n", openPetsClaudeImportLine), `# User notes\n\n${openPetsClaudeImportLine}\n`);
 assert.equal(ensureImportLine(`# User notes\n${openPetsClaudeImportLine}\n${openPetsClaudeImportLine}\n`, openPetsClaudeImportLine), `# User notes\n\n${openPetsClaudeImportLine}\n`);
@@ -55,14 +75,18 @@ try {
   const symlinkTarget = join(dir, "outside");
   mkdirSync(symlinkHome);
   mkdirSync(symlinkTarget);
-  symlinkSync(symlinkTarget, join(symlinkHome, ".claude"));
-  assert.throws(() => installClaudeOpenPetsMemory(symlinkHome));
+  const claudeDirLink = join(symlinkHome, ".claude");
+  if (canCreateTestSymlink(symlinkTarget, claudeDirLink, "junction")) {
+    assert.throws(() => installClaudeOpenPetsMemory(symlinkHome));
+  }
 
   const symlinkFileHome = join(dir, "symlink-file-home");
   mkdirSync(join(symlinkFileHome, ".claude"), { recursive: true });
   writeFileSync(join(dir, "outside-file"), "x", "utf8");
-  symlinkSync(join(dir, "outside-file"), join(symlinkFileHome, ".claude", "CLAUDE.md"));
-  assert.throws(() => installClaudeOpenPetsMemory(symlinkFileHome));
+  const claudeMdLink = join(symlinkFileHome, ".claude", "CLAUDE.md");
+  if (canCreateTestSymlink(join(dir, "outside-file"), claudeMdLink, "file")) {
+    assert.throws(() => installClaudeOpenPetsMemory(symlinkFileHome));
+  }
 
   const oversizedHome = join(dir, "oversized-home");
   mkdirSync(join(oversizedHome, ".claude"), { recursive: true });

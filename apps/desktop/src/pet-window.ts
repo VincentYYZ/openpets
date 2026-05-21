@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, screen, type IpcMainEvent, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, screen, type IpcMainEvent, type MenuItemConstructorOptions, type Rectangle } from "electron";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,8 +20,10 @@ export interface DefaultPetWindowOptions {
   readonly motionState?: PetMotionState;
   readonly reactionState?: UniversalSpriteState;
   readonly onPositionChanged: (position: Point) => void;
+  readonly onMoved?: (position: Point) => void;
   readonly onHideRequested: () => void;
   readonly onHelpRequested?: (anchorBounds: Electron.Rectangle) => void;
+  readonly onReminderRequested?: (anchorBounds: Electron.Rectangle) => void;
   readonly onInteractiveChanged?: (interactive: boolean, source?: string) => void;
   readonly onDragStarted?: () => void;
   readonly onDragEnded?: () => void;
@@ -67,6 +69,8 @@ const petWindowReactionStateCache = new WeakMap<BrowserWindow, UniversalSpriteSt
 const windowLoadChains = new WeakMap<BrowserWindow, Promise<void>>();
 const windowLoadSequences = new WeakMap<BrowserWindow, number>();
 const petDropZonePadding = Object.freeze({ top: 24, right: 24, bottom: 24, left: 24 });
+const windowsFullPetAnimation = process.platform !== "win32" || process.env.OPENPETS_WINDOWS_RENDER_MODE === "full" || process.env.OPENPETS_ENABLE_WINDOWS_PET_ANIMATION === "1";
+const petFrameDurationMultiplier = windowsFullPetAnimation ? 1 : 1.8;
 const outerPetWindowSize = Object.freeze({
   width: defaultPetWindowSize.width + petDropZonePadding.left + petDropZonePadding.right,
   height: defaultPetWindowSize.height + petDropZonePadding.top + petDropZonePadding.bottom,
@@ -78,6 +82,7 @@ export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismiss
   installMousePassthroughAndDrag(window, options.onBubbleDismissed, options.onDragStarted, options.onDragEnded, options.onFolderDragEntered, options.onFolderDragLeft, options.onFolderDropped, options.onInteractiveChanged);
   installPetContextMenu(window, [
     { label: "向宠物求助", click: () => options.onHelpRequested?.(window.getBounds()) },
+    { label: "宠物提醒你", click: () => options.onReminderRequested?.(window.getBounds()) },
     { type: "separator" },
     { label: "Hide pet", click: options.onHideRequested },
   ]);
@@ -90,11 +95,22 @@ export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismiss
     options.onPositionChanged(readWindowPosition(window));
   }, 150);
 
-  window.on("move", savePosition);
-  window.on("moved", savePosition);
+  const handleMove = (): void => {
+    if (window.isDestroyed()) {
+      return;
+    }
+
+    options.onMoved?.(readWindowPosition(window));
+    savePosition();
+  };
+
+  window.on("move", handleMove);
+  window.on("moved", handleMove);
   window.on("close", () => {
-    info("pet.window", "default window close", { windowId: window.id, position: readWindowPosition(window) });
-    options.onPositionChanged(readWindowPosition(window));
+    const position = readWindowPosition(window);
+    info("pet.window", "default window close", { windowId: window.id, position });
+    options.onMoved?.(position);
+    options.onPositionChanged(position);
   });
 
   void loadDefaultPetContent(window, options.paused, options.display, options.badge, dismissToken, options.motionState ?? "idle", options.reactionState);
@@ -249,10 +265,30 @@ function installMousePassthroughAndDrag(window: BrowserWindow, onBubbleDismissed
     window.setPosition(dragging.startWindowX + Math.round(point.screenX - dragging.startScreenX), dragging.startWindowY + Math.round(point.screenY - dragging.startScreenY), false);
   };
 
+  const refreshMouseTrackingAfterDrag = (reason: string): void => {
+    if (window.isDestroyed()) return;
+    // After a drag, Win32 frequently loses the transparent window's mouse
+    // tracking because the OS-level mouse capture was redirected during
+    // window.setPosition() calls. Without this, the renderer never receives
+    // further mousemove/mouseleave events, so `lastInteractive` is stuck at
+    // `true` and the auto-walk timer (which is gated on interactive=false)
+    // never resumes. Toggling setIgnoreMouseEvents re-registers tracking,
+    // and the probe lets the renderer report the current hover state.
+    if (process.platform === "win32") {
+      window.setIgnoreMouseEvents(true, { forward: true });
+      window.setIgnoreMouseEvents(false);
+    }
+    requestCursorHitTestProbe(reason);
+  };
+
   const handleDragEnd = (event: IpcMainEvent): void => {
     if (!isFromWindow(event)) return;
     dragging = null;
     debug("pet.window", "drag end", { windowId, position: window.isDestroyed() ? null : readWindowPosition(window) });
+    resetInteractiveStateIfCursorOutside("drag-end");
+    refreshMouseTrackingAfterDrag("drag-end");
+    scheduleWindowsMouseForwardingRearm("drag-end+75ms", 75);
+    scheduleWindowsMouseForwardingRearm("drag-end+175ms", 175);
     onDragEnded?.();
   };
 
@@ -491,7 +527,7 @@ export function getTransientReactionAnimationMs(display: PetTransientDisplay): n
   const state = getReactionSpriteState(display.reaction);
   const row = defaultPetSprite.states[state];
   const iterations = "iterations" in row ? row.iterations : "infinite";
-  return typeof iterations === "number" ? row.durationMs * iterations : null;
+  return typeof iterations === "number" ? Math.ceil(row.durationMs * iterations * petFrameDurationMultiplier) : null;
 }
 
 export function getTransientDisplayDurationMs(display: PetTransientDisplay): number {
@@ -548,6 +584,17 @@ export function readWindowPosition(window: BrowserWindow): Point {
   return clampToPrimaryWorkArea(toInnerPetWindowPosition({ x, y }), defaultPetWindowSize);
 }
 
+export function getDefaultPetSpriteBounds(window: BrowserWindow): Rectangle {
+  const position = readWindowPosition(window);
+  const scale = getAppStateSnapshot().preferences.petScale as PetScaleValue;
+  const scaledWidth = Math.ceil(defaultPetSprite.frameWidth * scale);
+  const scaledHeight = Math.ceil(defaultPetSprite.frameHeight * scale);
+  const petBottom = 22;
+  const x = position.x + Math.round((defaultPetWindowSize.width - scaledWidth) / 2);
+  const y = position.y + defaultPetWindowSize.height - petBottom - scaledHeight;
+  return { x, y, width: scaledWidth, height: scaledHeight };
+}
+
 async function createDefaultPetRender(paused: boolean, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null, dismissToken?: string, motionState: PetMotionState = "idle", reactionStateOverride?: UniversalSpriteState): Promise<PetContentRender> {
   const installedPetRender = await tryCreateInstalledPetRender(paused, display, badge, dismissToken, motionState, reactionStateOverride);
   if (installedPetRender) {
@@ -585,7 +632,7 @@ async function createDefaultPetRender(paused: boolean, display: PetTransientDisp
             --sprite-duration: ${stateRows.idle.durationMs}ms;
             --sprite-iterations: ${stateRows.idle.iterations};
             background-position: 0 var(--sprite-row-y);
-            animation: pet-frames var(--sprite-duration) steps(var(--sprite-frames)) var(--sprite-iterations);
+            animation: ${getPetFrameAnimationCss()};
             animation-play-state: var(--play-state);
             transform: scale(${scale});
             transform-origin: top left;
@@ -666,7 +713,7 @@ async function createInstalledPetRender(petId: string, displayName: string, paus
               --sprite-duration: ${stateRows.idle.durationMs}ms;
               --sprite-iterations: ${stateRows.idle.iterations};
               background-position: 0 var(--sprite-row-y);
-              animation: pet-frames var(--sprite-duration) steps(var(--sprite-frames)) var(--sprite-iterations);
+              animation: ${getPetFrameAnimationCss()};
               animation-play-state: var(--play-state);
               transform: scale(${scale});
               transform-origin: top left;
@@ -743,6 +790,10 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
     @keyframes status-pulse { 0%, 100% { opacity: 0.52; } 50% { opacity: 1; } }
     @media (prefers-reduced-motion: reduce) { .sprite, .installed-sprite, .bubble, .bubble-status-icon::before { animation: none !important; } }
   `;
+}
+
+function getPetFrameAnimationCss(): string {
+  return petFrameDurationMultiplier === 1 ? "pet-frames var(--sprite-duration) steps(var(--sprite-frames)) var(--sprite-iterations)" : `pet-frames calc(var(--sprite-duration) * ${petFrameDurationMultiplier}) steps(var(--sprite-frames)) var(--sprite-iterations)`;
 }
 
 function createSpriteStateCss(selector: ".sprite" | ".installed-sprite"): string {

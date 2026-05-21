@@ -15,6 +15,7 @@ const statusBadgeTimers = new Map<string, NodeJS.Timeout>();
 const dismissedAgentPets = new Set<string>();
 const displayGenerations = new Map<string, number>();
 const busyStatusBadgeMs = 120_000;
+const waitingStatusBadgeMs = 15_000;
 
 export function showAgentPet(petId: string): boolean {
   if (dismissedAgentPets.has(petId)) {
@@ -222,7 +223,8 @@ function setStatusBadge(petId: string, reaction: OpenPetsReaction): void {
   }
 
   statusBadges.set(petId, reaction);
-  debug("pet.agent", "status badge set", { petId, reaction, durationMs: isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs });
+  const durationMs = getStatusBadgeDurationMs(reaction);
+  debug("pet.agent", "status badge set", { petId, reaction, durationMs });
   const existingTimer = statusBadgeTimers.get(petId);
   if (existingTimer) clearTimeout(existingTimer);
   const timer = setTimeout(() => {
@@ -232,7 +234,7 @@ function setStatusBadge(petId: string, reaction: OpenPetsReaction): void {
       const display = transientDisplays.get(petId) ?? null;
       void loadExplicitPetContent(window, petId, display, null, getCurrentDismissToken(petId, display, null), getPreferredPetScale());
     }
-  }, isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs);
+  }, durationMs);
   statusBadgeTimers.set(petId, timer);
 }
 
@@ -246,6 +248,11 @@ function clearStatusBadge(petId: string): void {
 
 function isBusyStatusBadgeReaction(reaction: OpenPetsReaction): boolean {
   return reaction === "thinking" || reaction === "working" || reaction === "editing" || reaction === "running" || reaction === "testing" || reaction === "waiting";
+}
+
+function getStatusBadgeDurationMs(reaction: OpenPetsReaction): number {
+  if (reaction === "waiting") return waitingStatusBadgeMs;
+  return isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs;
 }
 
 function getCurrentDismissToken(petId: string, display: PetTransientDisplay | null, badge: PetStatusBadgeReaction | null): string | undefined {

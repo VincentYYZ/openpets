@@ -1,21 +1,41 @@
 import { app, BrowserWindow, ipcMain, screen, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 
+import { beginPetHelpRequest, finishPetHelpRequest } from "./default-pet-controller.js";
 import { askPetHelpWithClaude, type PetHelpTurn } from "./pet-help-service.js";
 import { error as logError, info } from "./logger.js";
+import { extractPetMemoryFacts, summarizePetHelpConversation } from "./pet-memory-extractor.js";
+import { recordPetHelpMemory } from "./pet-memory-store.js";
 
 let petHelpWindow: BrowserWindow | null = null;
+let petHelpAnchorBounds: Electron.Rectangle | null = null;
 let petHelpHandlersInstalled = false;
+let petHelpWindowVisibilityChangedHandler: ((open: boolean) => void) | null = null;
 const petHelpWindowWidth = 420;
 const petHelpWindowHeight = 520;
 
+export function setPetHelpWindowVisibilityChangedHandler(handler: ((open: boolean) => void) | null): void {
+  petHelpWindowVisibilityChangedHandler = handler;
+}
+
+export function updatePetHelpWindowAnchor(anchorBounds: Electron.Rectangle): void {
+  petHelpAnchorBounds = anchorBounds;
+  if (!petHelpWindow || petHelpWindow.isDestroyed()) {
+    return;
+  }
+
+  positionPetHelpWindow(petHelpWindow, anchorBounds);
+}
+
 export function openPetHelpWindow(anchorBounds: Electron.Rectangle): void {
   installPetHelpHandlers();
+  petHelpAnchorBounds = anchorBounds;
 
   if (petHelpWindow && !petHelpWindow.isDestroyed()) {
     positionPetHelpWindow(petHelpWindow, anchorBounds);
     petHelpWindow.show();
     petHelpWindow.focus();
+    petHelpWindowVisibilityChangedHandler?.(true);
     return;
   }
 
@@ -64,10 +84,13 @@ export function openPetHelpWindow(anchorBounds: Electron.Rectangle): void {
   window.on("show", () => applyPetHelpAlwaysOnTop(window));
   window.on("closed", () => {
     if (petHelpWindow === window) petHelpWindow = null;
+    petHelpAnchorBounds = null;
+    petHelpWindowVisibilityChangedHandler?.(false);
   });
   window.once("ready-to-show", () => {
     window.show();
     window.focus();
+    petHelpWindowVisibilityChangedHandler?.(true);
   });
   window.loadURL(createPetHelpDataUrl()).catch((error: unknown) => {
     logError("ui", "pet help window load failed", error);
@@ -83,13 +106,41 @@ function installPetHelpHandlers(): void {
   ipcMain.handle("openpets:pet-help-ask", async (event, payload: unknown) => {
     assertPetHelpSender(event);
     const request = validatePetHelpAskPayload(payload);
-    return askPetHelpWithClaude(request);
+    beginPetHelpRequest();
+    try {
+      const response = await askPetHelpWithClaude(request);
+      finishPetHelpRequest("success");
+      recordPetHelpConversationMemoryLater([...request.history, { role: "user", content: request.message }, { role: "assistant", content: response.answer }]);
+      return response;
+    } catch (error: unknown) {
+      finishPetHelpRequest("error");
+      throw error;
+    }
   });
 
   ipcMain.on("openpets:pet-help-close", (event) => {
     if (!isPetHelpSender(event)) return;
     petHelpWindow?.close();
   });
+}
+
+function recordPetHelpConversationMemoryLater(turns: readonly PetHelpTurn[]): void {
+  const timer = setTimeout(() => {
+    recordPetHelpConversationMemory(turns);
+  }, 0);
+  timer.unref?.();
+}
+
+function recordPetHelpConversationMemory(turns: readonly PetHelpTurn[]): void {
+  try {
+    const recentTurns = turns.slice(-10);
+    const summary = summarizePetHelpConversation(recentTurns);
+    const facts = extractPetMemoryFacts(recentTurns);
+    if (!summary && facts.length === 0) return;
+    recordPetHelpMemory(summary, facts);
+  } catch (error) {
+    logError("pet.memory", "failed to record pet help memory", error);
+  }
 }
 
 function assertPetHelpSender(event: IpcMainInvokeEvent): void {
@@ -127,8 +178,8 @@ function positionPetHelpWindow(window: BrowserWindow, anchorBounds: Electron.Rec
   const display = screen.getDisplayMatching(anchorBounds);
   const workArea = display.workArea;
   const [width, height] = window.getSize();
-  const preferredX = anchorBounds.x + anchorBounds.width - 16;
-  const preferredY = anchorBounds.y + anchorBounds.height - height + 16;
+  const preferredX = anchorBounds.x + anchorBounds.width;
+  const preferredY = anchorBounds.y + anchorBounds.height;
   const x = clamp(Math.round(preferredX), workArea.x, workArea.x + workArea.width - width);
   const y = clamp(Math.round(preferredY), workArea.y, workArea.y + workArea.height - height);
   window.setPosition(x, y, false);

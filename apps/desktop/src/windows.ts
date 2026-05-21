@@ -6,10 +6,11 @@ import { app, BrowserWindow, ipcMain, protocol, type IpcMainInvokeEvent } from "
 
 import { getAgentSetupSnapshot, runAgentSetupAction, updateAgentSetupCommandPaths } from "./agent-setup.js";
 import { refreshAgentPetContent } from "./agent-pet-controller.js";
-import { completeOnboarding, getAppStateSnapshot, normalizePetScale, petScaleOptions, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings } from "./app-state.js";
+import { completeOnboarding, getAppStateSnapshot, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings } from "./app-state.js";
 import { getCatalogPageUiState, getCatalogSearchUiState, getCatalogUiState } from "./catalog.js";
 import { getCodexPetsUiState, importCodexPet, readCodexPetSpritesheet } from "./codex-pets.js";
 import { refreshDefaultPetContent, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
+import { clearPetMemory, deletePetMemoryFact, getPetMemorySnapshot, setPetMemoryEnabled } from "./pet-memory-store.js";
 import { installPet, removePet, setDefaultInstalledPet } from "./pet-installation.js";
 import { getHtmlLanguage, getTaskWindowDefinitions, normalizeAppLanguage, type AppLanguage } from "./i18n.js";
 import { getInstalledPetDir } from "./pet-paths.js";
@@ -50,6 +51,28 @@ export function installInternalUiHandlers(): void {
   ipcMain.handle("openpets:get-reaction-animation-settings", async (event) => {
     assertAllowedSender(event, ["settings"]);
     return getReactionAnimationSettingsSnapshot();
+  });
+
+  ipcMain.handle("openpets:get-pet-memory", (event) => {
+    assertAllowedSender(event, ["settings"]);
+    return getPetMemorySnapshot();
+  });
+
+  ipcMain.handle("openpets:set-pet-memory-enabled", (event, enabled: unknown) => {
+    assertAllowedSender(event, ["settings"]);
+    if (typeof enabled !== "boolean") throw new Error("Invalid pet memory setting.");
+    return setPetMemoryEnabled(enabled);
+  });
+
+  ipcMain.handle("openpets:delete-pet-memory-fact", (event, id: unknown) => {
+    assertAllowedSender(event, ["settings"]);
+    if (typeof id !== "string") throw new Error("Invalid pet memory id.");
+    return deletePetMemoryFact(id);
+  });
+
+  ipcMain.handle("openpets:clear-pet-memory", (event) => {
+    assertAllowedSender(event, ["settings"]);
+    return clearPetMemory();
   });
 
   ipcMain.handle("openpets:onboarding-snapshot", (event) => {
@@ -891,12 +914,42 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
               </span>
               <select id="pet-scale" class="settings-select" aria-label="Pet scale">${scaleOptionsHtml}</select>
             </label>
+            <label class="setting-row setting-row-slider">
+              <span>
+                <strong>Pet walking speed</strong>
+                <small id="pet-walk-speed-value">Normal</small>
+              </span>
+              <input id="pet-walk-speed" class="settings-range" type="range" min="${minPetWalkSpeed}" max="${maxPetWalkSpeed}" step="${petWalkSpeedStep}" aria-label="Pet walking speed" />
+            </label>
             <div class="setting-row">
               <span>
                 <strong>Reset default pet position</strong>
                 <small>Moves the default pet back near the bottom-right of the primary display.</small>
               </span>
               <button id="reset-default-pet-position">Reset</button>
+            </div>
+          </section>
+          <section class="settings-panel" aria-labelledby="settings-memory-title">
+            <div class="settings-section-heading">
+              <span>
+                <small>Memory</small>
+                <h2 id="settings-memory-title">Local long-term memory</h2>
+              </span>
+              <button id="clear-pet-memory" class="secondary">Clear memory</button>
+            </div>
+            <label class="setting-row">
+              <span>
+                <strong>Enable local memory</strong>
+                <small>Summarizes pet help conversations into local facts used in future replies.</small>
+              </span>
+              <input id="pet-memory-enabled" type="checkbox" />
+            </label>
+            <div class="setting-row setting-row-stack">
+              <span>
+                <strong>Memory storage</strong>
+                <small id="pet-memory-path">Loading memory path…</small>
+              </span>
+              <div id="pet-memory-list" class="memory-list" aria-live="polite"></div>
             </div>
           </section>
           <section class="settings-panel reaction-settings-panel" aria-labelledby="settings-reaction-animations-title">
@@ -994,6 +1047,7 @@ function createTaskWindowStyles(): string {
     body[data-openpets-view="settings"] .settings-section-heading small { color: #2478ff; font-size: 11px; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; }
     body[data-openpets-view="settings"] .settings-section-heading h2 { margin: 0; color: #102149; font-size: 19px; line-height: 1.2; }
     body[data-openpets-view="settings"] .setting-row { min-height: 58px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 15px; border: 1px solid rgba(126, 161, 210, 0.32); border-radius: 16px; background: rgba(255,255,255,0.68); box-shadow: inset 0 1px 0 rgba(255,255,255,0.82); color: #17284f; }
+    body[data-openpets-view="settings"] .setting-row-stack { align-items: stretch; flex-direction: column; }
     body[data-openpets-view="settings"] .setting-row strong { display: block; margin-bottom: 4px; color: #102149; font-size: 14px; }
     body[data-openpets-view="settings"] .setting-row small { color: #63708f; line-height: 1.35; }
     body[data-openpets-view="settings"] .setting-row.disabled { opacity: 0.76; }
@@ -1011,6 +1065,13 @@ function createTaskWindowStyles(): string {
     body[data-openpets-view="settings"] .reaction-row-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
     @keyframes reaction-preview-frames { from { background-position: 0 var(--preview-row-y); } to { background-position: calc(-192px * var(--preview-frames)) var(--preview-row-y); } }
     body[data-openpets-view="settings"] input[type="checkbox"] { width: 42px; height: 24px; flex: 0 0 auto; accent-color: #2478ff; cursor: pointer; }
+    body[data-openpets-view="settings"] .setting-row-slider { align-items: center; }
+    body[data-openpets-view="settings"] .settings-range { width: min(220px, 38vw); min-width: 150px; accent-color: #2478ff; cursor: pointer; }
+    body[data-openpets-view="settings"] .memory-list { display: grid; gap: 8px; min-width: 0; }
+    body[data-openpets-view="settings"] .memory-empty { margin: 0; color: #63708f; font-size: 12px; font-weight: 750; }
+    body[data-openpets-view="settings"] .memory-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 11px; border: 1px solid rgba(126, 161, 210, 0.28); border-radius: 13px; background: rgba(255,255,255,0.68); }
+    body[data-openpets-view="settings"] .memory-item strong { margin: 0 0 3px; color: #176df2; font-size: 11px; text-transform: uppercase; }
+    body[data-openpets-view="settings"] .memory-item p { margin: 0; color: #17284f; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
     body[data-openpets-view="settings"] .settings-select { min-height: 40px; min-width: 128px; box-sizing: border-box; border: 1px solid rgba(37, 99, 235, 0.34); border-radius: 11px; background: rgba(255,255,255,0.82); color: #17284f; padding: 0 12px; font: inherit; font-weight: 850; outline: none; }
     body[data-openpets-view="settings"] .settings-actions-inline { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
     body[data-openpets-view="settings"] input[type="checkbox"]:focus-visible, body[data-openpets-view="settings"] button:focus-visible, body[data-openpets-view="settings"] .settings-select:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.34); outline-offset: 3px; }
@@ -1364,12 +1425,12 @@ async function getDefaultPetPreviewSpriteInfo(): Promise<{ readonly path: string
   return { path: builtInPath, version: `builtin-${Math.round(fallback.mtimeMs)}-${fallback.size}` };
 }
 
-function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
+function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
   if (!isRecord(value)) {
     throw new Error("Invalid preferences patch.");
   }
 
-  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
+  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
 
   if ("language" in value) {
     const language = normalizeAppLanguage(value.language);
@@ -1386,6 +1447,12 @@ function validatePreferencePatch(value: unknown): { language?: AppLanguage; open
     const scale = normalizePetScale(value.petScale);
     if (scale !== value.petScale) throw new Error("Invalid pet scale value.");
     patch.petScale = scale;
+  }
+
+  if ("petWalkSpeed" in value) {
+    const speed = normalizePetWalkSpeed(value.petWalkSpeed);
+    if (speed !== value.petWalkSpeed) throw new Error("Invalid pet walking speed value.");
+    patch.petWalkSpeed = speed;
   }
 
   if ("reactionAnimationOverrides" in value) {

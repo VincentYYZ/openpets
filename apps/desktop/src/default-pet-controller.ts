@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen, type Rectangle } from "electron";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
@@ -6,11 +6,12 @@ import { basename, dirname } from "node:path";
 import { defaultHoveredAmbientSpeechIntervalMs, defaultMovingAmbientSpeechIntervalMs, getAppStateSnapshot, getDefaultPetPosition, resetDefaultPetPosition, setDefaultPetPosition, updatePreferences } from "./app-state.js";
 import { resolvePetAnimationState, type ResolvedPetAnimationState } from "./pet-animation-resolver.js";
 import { createInitialPetBehaviorState, reducePetBehavior, type PetBehaviorCommand, type PetBehaviorEvent } from "./pet-behavior-machine.js";
-import { defaultPetWindowSize, getDefaultPetInitialPosition } from "./display.js";
+import { defaultPetWindowSize, getDefaultPetInitialPosition, type Point } from "./display.js";
 import { debug, error as logError, info } from "./logger.js";
 import { transientDisplayMs, type OpenPetsReaction } from "./local-ipc-protocol.js";
-import { clearTransientReaction, createDefaultPetWindow, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetMotionState, setPetReactionState, setPetWindowPosition, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
-import { openPetHelpWindow } from "./pet-help-window.js";
+import { clearTransientReaction, createDefaultPetWindow, getDefaultPetSpriteBounds, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetMotionState, setPetReactionState, setPetWindowPosition, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
+import { openPetHelpWindow, setPetHelpWindowVisibilityChangedHandler, updatePetHelpWindowAnchor } from "./pet-help-window.js";
+import { openPetReminderWindow, setPetReminderWindowVisibilityChangedHandler, updatePetReminderWindowAnchor } from "./pet-reminder-window.js";
 import { pickReactionMessage } from "./reaction-messages.js";
 
 let defaultPetWindow: BrowserWindow | null = null;
@@ -23,6 +24,10 @@ let statusBadgeTimeout: NodeJS.Timeout | null = null;
 let autoWalkTimer: NodeJS.Timeout | null = null;
 let ambientSpeechTimer: NodeJS.Timeout | null = null;
 let folderDragPreviewTimeout: NodeJS.Timeout | null = null;
+const helperWindowsOpen = new Set<HelperWindowName>();
+let helperWindowsLifecycleBound = false;
+let petHelpRequestDepth = 0;
+let petHelpBusyReactionGuardUntil = 0;
 let behaviorState = createInitialPetBehaviorState(Math.random() < 0.5 ? -1 : 1);
 let currentAnimationState: ResolvedPetAnimationState = {
   animationPriority: "motion",
@@ -33,12 +38,17 @@ let displayGeneration = 0;
 let petInteractive = false;
 let lastAmbientSpeechAt = 0;
 const busyStatusBadgeMs = 120_000;
-const autoWalkTickMs = 48;
-const autoWalkSpeedPx = 3;
+const waitingStatusBadgeMs = 15_000;
+const windowsFullAutoWalk = process.platform !== "win32" || process.env.OPENPETS_WINDOWS_RENDER_MODE === "full" || process.env.OPENPETS_ENABLE_WINDOWS_AUTO_WALK === "1";
+const baseAutoWalkTickMs = windowsFullAutoWalk ? 48 : 140;
+const baseAutoWalkSpeedPx = windowsFullAutoWalk ? 3 : 8;
 const autoWalkResumeAfterDragMs = 1200;
 const autoWalkEdgePaddingPx = 12;
 const folderDragPromptMessage = "把文件或文件夹交给我，我来叫 Claude Code。";
 const folderDragPreviewTimeoutMs = 500;
+const petHelpBusyReactionGuardMs = 1500;
+
+type HelperWindowName = "help" | "reminder";
 
 interface ClaudeDropLaunchTarget {
   readonly kind: "file" | "folder";
@@ -113,7 +123,37 @@ export function applyExternalPetReaction(reaction: OpenPetsReaction): { readonly
     return { shown: false, reason: "paused" };
   }
 
+  if (shouldSuppressExternalReaction(reaction)) {
+    return { shown: isDefaultPetVisible(), reason: "pet-help-active" };
+  }
+
   setTransientDisplay({ reaction });
+  showDefaultPetForExternalEvent();
+  return { shown: isDefaultPetVisible() };
+}
+
+export function beginPetHelpRequest(): { readonly shown: boolean; readonly reason?: string } {
+  if (paused) {
+    return { shown: false, reason: "paused" };
+  }
+
+  petHelpRequestDepth += 1;
+  petHelpBusyReactionGuardUntil = 0;
+  setTransientDisplay({ reaction: "thinking" });
+  showDefaultPetForExternalEvent();
+  return { shown: isDefaultPetVisible() };
+}
+
+export function finishPetHelpRequest(result: "success" | "error"): { readonly shown: boolean; readonly reason?: string } {
+  if (paused) {
+    return { shown: false, reason: "paused" };
+  }
+
+  petHelpRequestDepth = Math.max(0, petHelpRequestDepth - 1);
+  if (petHelpRequestDepth === 0) {
+    petHelpBusyReactionGuardUntil = Date.now() + petHelpBusyReactionGuardMs;
+  }
+  setTransientDisplay({ reaction: result });
   showDefaultPetForExternalEvent();
   return { shown: isDefaultPetVisible() };
 }
@@ -121,6 +161,10 @@ export function applyExternalPetReaction(reaction: OpenPetsReaction): { readonly
 export function applyExternalPetSay(message: string, reaction?: OpenPetsReaction): { readonly shown: boolean; readonly reason?: string } {
   if (paused) {
     return { shown: false, reason: "paused" };
+  }
+
+  if (petHelpRequestDepth > 0 || (reaction && shouldSuppressExternalReaction(reaction))) {
+    return { shown: isDefaultPetVisible(), reason: "pet-help-active" };
   }
 
   if (!reaction) clearStatusBadge();
@@ -174,6 +218,12 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     return defaultPetWindow;
   }
 
+  if (!helperWindowsLifecycleBound) {
+    setPetHelpWindowVisibilityChangedHandler(handlePetHelpWindowVisibilityChanged);
+    setPetReminderWindowVisibilityChangedHandler(handlePetReminderWindowVisibilityChanged);
+    helperWindowsLifecycleBound = true;
+  }
+
   currentAnimationState = resolveCurrentAnimationState();
   const position = getSafeDefaultPetPosition(getDefaultPetPosition());
 
@@ -184,9 +234,10 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     badge: statusBadge,
     motionState: currentAnimationState.motionState,
     reactionState: currentAnimationState.reactionState,
-    onPositionChanged: setDefaultPetPosition,
+    onPositionChanged: handleDefaultPetPositionChanged,
     onHideRequested: hideDefaultPet,
-    onHelpRequested: openPetHelpWindow,
+    onHelpRequested: handlePetHelpRequested,
+    onReminderRequested: handlePetReminderRequested,
     onInteractiveChanged: handlePetInteractiveChanged,
     onDragStarted: handlePetDragStarted,
     onDragEnded: handlePetDragEnded,
@@ -195,6 +246,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     onFolderDropped: (paths) => {
       void handleFolderDroppedOnPet(paths);
     },
+    onMoved: handleDefaultPetMoved,
     onBubbleDismissed: handleBubbleDismissed,
   }, getCurrentDismissToken());
   const windowId = defaultPetWindow.id;
@@ -210,6 +262,86 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
   });
 
   return defaultPetWindow;
+}
+
+function handleDefaultPetPositionChanged(position: Point): void {
+  setDefaultPetPosition(position);
+  syncHelperWindowAnchors();
+}
+
+function handleDefaultPetMoved(_position: Point): void {
+  syncHelperWindowAnchors();
+}
+
+function handlePetHelpRequested(anchorBounds: Rectangle): void {
+  setHelperWindowOpen("help", true);
+  openPetHelpWindow(anchorBounds);
+}
+
+function handlePetReminderRequested(anchorBounds: Rectangle): void {
+  setHelperWindowOpen("reminder", true);
+  openPetReminderWindow(anchorBounds);
+}
+
+function handlePetHelpWindowVisibilityChanged(open: boolean): void {
+  setHelperWindowOpen("help", open);
+}
+
+function handlePetReminderWindowVisibilityChanged(open: boolean): void {
+  setHelperWindowOpen("reminder", open);
+}
+
+function setHelperWindowOpen(name: HelperWindowName, open: boolean): void {
+  const wasOpen = helperWindowsOpen.size > 0;
+  const alreadyOpen = helperWindowsOpen.has(name);
+  if (open && alreadyOpen) {
+    syncHelperWindowAnchors();
+    return;
+  }
+  if (!open && !alreadyOpen) return;
+
+  if (open) helperWindowsOpen.add(name);
+  else helperWindowsOpen.delete(name);
+
+  const isOpen = helperWindowsOpen.size > 0;
+  if (isOpen && !wasOpen) {
+    dispatchPetBehaviorEvent({ type: "pointer-leave" });
+    stopDefaultPetAutoWalk();
+    clearAmbientSpeechTimer();
+    syncHelperWindowAnchors();
+    return;
+  }
+  if (!isOpen && wasOpen) {
+    startDefaultPetAutoWalk();
+    return;
+  }
+  if (isOpen) syncHelperWindowAnchors();
+}
+
+function isAnyHelperWindowOpen(): boolean {
+  return helperWindowsOpen.size > 0;
+}
+
+function syncHelperWindowAnchors(): void {
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed()) return;
+  if (helperWindowsOpen.size === 0) return;
+  const bounds = getDefaultPetSpriteBounds(defaultPetWindow);
+  if (helperWindowsOpen.has("help")) updatePetHelpWindowAnchor(bounds);
+  if (helperWindowsOpen.has("reminder")) updatePetReminderWindowAnchor(bounds);
+}
+
+export function triggerPetReminderDisplay(text: string): void {
+  if (paused) {
+    info("pet.reminder", "reminder skipped due to pause", { text });
+    return;
+  }
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  if (!trimmed) return;
+  const limited = trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 80)}…`;
+  const message = `提醒：${limited}`;
+  setTransientDisplay({ message, reaction: "waving" });
+  showDefaultPetForExternalEvent();
+  info("pet.reminder", "reminder displayed", { message });
 }
 
 function setTransientDisplay(display: PetTransientDisplay): void {
@@ -269,12 +401,13 @@ function setStatusBadge(reaction: OpenPetsReaction): void {
 
   statusBadge = reaction;
   currentAnimationState = resolveCurrentAnimationState();
-  debug("pet.default", "status badge set", { reaction, durationMs: isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs });
+  const durationMs = getStatusBadgeDurationMs(reaction);
+  debug("pet.default", "status badge set", { reaction, durationMs });
   if (statusBadgeTimeout) clearTimeout(statusBadgeTimeout);
   statusBadgeTimeout = setTimeout(() => {
     clearStatusBadge();
     refreshDefaultPetContent();
-  }, isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs);
+  }, durationMs);
 }
 
 function clearStatusBadge(): void {
@@ -507,11 +640,11 @@ function launchClaudeCodeTerminal(target: ClaudeDropLaunchTarget): void {
   }
 
   const windowsCommand = buildWindowsCommandLine(claudeCommand, commandArgs);
-  const powershellCommand = `Start-Process -FilePath 'cmd.exe' -WorkingDirectory ${quotePowerShellString(target.workingDirectory)} -ArgumentList '/k', ${quotePowerShellString(windowsCommand)}`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", powershellCommand], {
+  const child = spawn("cmd.exe", ["/d", "/k", windowsCommand], {
+    cwd: target.workingDirectory,
     detached: true,
     stdio: "ignore",
-    windowsHide: true,
+    windowsHide: false,
   });
   child.once("error", (error) => {
     logError("pet.default", "windows claude terminal process error", error);
@@ -545,10 +678,6 @@ function quoteWindowsCmdArg(value: string): string {
   return `"${value
     .replace(/(\\*)"/g, "$1$1\\\"")
     .replace(/(\\+)$/g, "$1$1")}"`;
-}
-
-function quotePowerShellString(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function getCurrentDismissToken(): string | undefined {
@@ -638,6 +767,7 @@ function shouldAllowAmbientSpeech(): boolean {
       && !defaultPetWindow.isDestroyed()
       && defaultPetWindow.isVisible()
       && !paused
+      && !isAnyHelperWindowOpen()
       && getAppStateSnapshot().preferences.speechBubblesEnabled
       && !statusBadge
       && behaviorState.mode !== "dragged"
@@ -696,6 +826,22 @@ function isBusyStatusBadgeReaction(reaction: OpenPetsReaction): boolean {
   return reaction === "thinking" || reaction === "working" || reaction === "editing" || reaction === "running" || reaction === "testing" || reaction === "waiting";
 }
 
+function getStatusBadgeDurationMs(reaction: OpenPetsReaction): number {
+  if (reaction === "waiting") return waitingStatusBadgeMs;
+  return isBusyStatusBadgeReaction(reaction) ? busyStatusBadgeMs : transientDisplayMs;
+}
+
+function shouldSuppressExternalReaction(reaction: OpenPetsReaction): boolean {
+  if (reaction === "success" || reaction === "error") return false;
+  if (petHelpRequestDepth > 0) {
+    return true;
+  }
+  if (Date.now() < petHelpBusyReactionGuardUntil && isBusyStatusBadgeReaction(reaction)) {
+    return true;
+  }
+  return false;
+}
+
 function reclampDefaultPetWindow(): void {
   if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
     return;
@@ -705,14 +851,15 @@ function reclampDefaultPetWindow(): void {
   info("pet.default", "reclamp position", { windowId: defaultPetWindow.id, position: safePosition });
   setPetWindowPosition(defaultPetWindow, safePosition, false);
   setDefaultPetPosition(safePosition);
+  syncHelperWindowAnchors();
 }
 
 function startDefaultPetAutoWalk(): void {
-  if (autoWalkTimer || paused || petInteractive || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
+  if (autoWalkTimer || paused || petInteractive || isAnyHelperWindowOpen() || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
     return;
   }
 
-  autoWalkTimer = setInterval(stepDefaultPetAutoWalk, autoWalkTickMs);
+  autoWalkTimer = setTimeout(stepDefaultPetAutoWalk, getAutoWalkTickMs());
   scheduleAmbientSpeech();
 }
 
@@ -722,18 +869,24 @@ function stopDefaultPetAutoWalk(): void {
     return;
   }
 
-  clearInterval(autoWalkTimer);
+  clearTimeout(autoWalkTimer);
   autoWalkTimer = null;
   if (!petInteractive) clearAmbientSpeechTimer();
 }
 
 function stepDefaultPetAutoWalk(): void {
+  autoWalkTimer = null;
   if (!defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
     stopDefaultPetAutoWalk();
     return;
   }
 
-  if (paused || statusBadge || (transientDisplay && !transientDisplay.passive)) {
+  if (paused) {
+    return;
+  }
+
+  if (statusBadge || (transientDisplay && !transientDisplay.passive)) {
+    startDefaultPetAutoWalk();
     return;
   }
 
@@ -745,8 +898,21 @@ function stepDefaultPetAutoWalk(): void {
     positionX: position.x,
     minX: workArea.x + autoWalkEdgePaddingPx,
     maxX: workArea.x + workArea.width - defaultPetWindowSize.width - autoWalkEdgePaddingPx,
-    speedPx: autoWalkSpeedPx,
+    speedPx: getAutoWalkSpeedPx(),
   });
+  startDefaultPetAutoWalk();
+}
+
+function getAutoWalkTickMs(): number {
+  const speed = getAppStateSnapshot().preferences.petWalkSpeed;
+  if (speed < 1) {
+    return Math.round(baseAutoWalkTickMs / Math.max(speed, 0.2));
+  }
+  return baseAutoWalkTickMs;
+}
+
+function getAutoWalkSpeedPx(): number {
+  return Math.max(1, Math.round(baseAutoWalkSpeedPx * getAppStateSnapshot().preferences.petWalkSpeed));
 }
 
 export function shouldOpenDefaultPetOnLaunch(): boolean {
@@ -759,5 +925,6 @@ export function resetDefaultPetToInitialPosition(): void {
 
   if (defaultPetWindow && !defaultPetWindow.isDestroyed()) {
     setPetWindowPosition(defaultPetWindow, safePosition, false);
+    syncHelperWindowAnchors();
   }
 }

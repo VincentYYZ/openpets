@@ -224,7 +224,7 @@ const setFolderDraggingOverPet = (next) => {
   if (next) clearFolderDragLeaveTimer();
   if (folderDraggingOverPet === next) return;
   folderDraggingOverPet = next;
-  reportInteractiveHit(next || dragging || Boolean(lastInteractiveHit), next ? "folder-drag-enter" : "folder-drag-leave", true);
+  reportInteractiveHit(next || dragging, next ? "folder-drag-enter" : "folder-drag-leave", true);
   ipcRenderer.send(next ? "openpets:pet-folder-drag-enter" : "openpets:pet-folder-drag-leave");
 };
 
@@ -256,7 +256,7 @@ const updateInteractiveHit = (event) => {
   }
   const kind = getHoverHitKind(event);
   if (kind === "pet") setInteractiveHit(true, "mouse");
-  else if (kind === "drop-zone") setInteractiveHit(true, "drop-zone");
+  else if (kind === "drop-zone" && event.buttons !== 0) setInteractiveHit(true, "drop-zone");
   else setInteractiveHit(false, "mouse");
 };
 
@@ -335,13 +335,23 @@ const installMouseInterop = () => {
   });
 
   document.addEventListener("mouseup", () => {
-    if (!dragging) return;
+    if (!dragging) {
+      if (!folderDraggingOverPet) setInteractiveHit(false, "mouse");
+      return;
+    }
     dragging = false;
     ipcRenderer.send("openpets:pet-drag-end");
   });
 
   document.addEventListener("mouseleave", () => {
     if (!dragging && !folderDraggingOverPet) setInteractiveHit(false);
+  }, { passive: true });
+
+  document.addEventListener("mouseout", (event) => {
+    if (dragging || folderDraggingOverPet) return;
+    const related = event.relatedTarget;
+    if (related instanceof Element && related.closest(".pet-shell, .bubble, .drop-zone")) return;
+    setInteractiveHit(false, "mouse");
   }, { passive: true });
 
   setInteractiveHit(false, "ready");

@@ -2,7 +2,10 @@ import { app } from "electron";
 import { resolve } from "node:path";
 
 import { initializeAppState, isOnboardingCompleted, releaseStartupInstallLock } from "./app-state.js";
-import { installDefaultPetDisplayHandlers, shouldOpenDefaultPetOnLaunch, showDefaultPet } from "./default-pet-controller.js";
+import { installDefaultPetDisplayHandlers, shouldOpenDefaultPetOnLaunch, showDefaultPet, triggerPetReminderDisplay } from "./default-pet-controller.js";
+import { initializePetMemoryStore } from "./pet-memory-store.js";
+import { initializePetReminderStore } from "./pet-reminder-store.js";
+import { startPetReminderScheduler } from "./pet-reminder-scheduler.js";
 import { installAppLifecycle } from "./lifecycle.js";
 import { error as logError, getLogFilePath, info, initializeLogger } from "./logger.js";
 import { startLocalIpcServer } from "./local-ipc.js";
@@ -15,6 +18,15 @@ import { installInternalUiHandlers, installInternalUiProtocol, openTaskWindow } 
 // during startup/profile initialization.
 app.commandLine.appendSwitch("use-mock-keychain");
 app.commandLine.appendSwitch("password-store", "basic");
+
+// Windows transparent, frameless, always-on-top pet windows are fragile under
+// Chromium GPU compositing. On some machines Electron repeatedly reports
+// cc tile memory exhaustion and may skip drawing content. Keep macOS/Linux on
+// their normal accelerated path, but default Windows to software compositing.
+const useWindowsSoftwareCompositing = process.platform === "win32" && process.env.OPENPETS_ENABLE_WINDOWS_GPU !== "1";
+if (useWindowsSoftwareCompositing) {
+  app.disableHardwareAcceleration();
+}
 
 // GNOME Wayland does not allow Electron apps to reliably control window
 // z-order or absolute position, which breaks the desktop-pet contract: staying
@@ -39,13 +51,16 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     initializeLogger();
     app.setName("OpenPets");
-    info("app", "startup begin", { version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, pid: process.pid, ozonePlatform: app.commandLine.getSwitchValue("ozone-platform") || null });
+    info("app", "startup begin", { version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, pid: process.pid, ozonePlatform: app.commandLine.getSwitchValue("ozone-platform") || null, windowsSoftwareCompositing: useWindowsSoftwareCompositing });
 
     if (process.platform === "darwin") {
       app.dock?.hide();
     }
 
     initializeAppState();
+    initializePetMemoryStore();
+    initializePetReminderStore();
+    startPetReminderScheduler((reminder) => triggerPetReminderDisplay(reminder.text));
     installInternalUiProtocol();
     installInternalUiHandlers();
     createAppTray();

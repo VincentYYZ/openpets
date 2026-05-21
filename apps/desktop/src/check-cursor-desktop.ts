@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 // Desktop-specific Cursor integration checks
@@ -13,9 +13,10 @@ try {
   const homeDir = join(root, "home");
   mkdirSync(homeDir);
   const expectedConfigPath = join(homeDir, ".cursor", "mcp.json");
+  const expectedConfigSuffix = expectedConfigPath.split(sep).slice(-2).join("/");
   
   // Verify the path structure matches what desktop uses
-  assert.ok(expectedConfigPath.endsWith(".cursor/mcp.json"), "Cursor global config path must end with .cursor/mcp.json");
+  assert.equal(expectedConfigSuffix, ".cursor/mcp.json", "Cursor global config path must end with .cursor/mcp.json");
   assert.ok(!expectedConfigPath.includes(".."), "Cursor config path must not contain traversal");
 
   // Test that desktop would handle missing config gracefully
@@ -91,7 +92,7 @@ try {
 
   // Test that desktop would format user paths correctly
   const longPath = join(homeDir, ".cursor", "mcp.json");
-  const formattedPath = longPath.replace(homeDir, "~");
+  const formattedPath = longPath.replace(homeDir, "~").replaceAll("\\", "/");
   assert.equal(formattedPath, "~/.cursor/mcp.json");
 
   // Test that desktop would handle action availability correctly

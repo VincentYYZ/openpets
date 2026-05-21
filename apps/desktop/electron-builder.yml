@@ -13,6 +13,7 @@ files:
   - preload.cjs
   - pet-preload.cjs
   - pet-help-preload.cjs
+  - pet-reminder-preload.cjs
   - assets/**
   - package.json
 

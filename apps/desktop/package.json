@@ -17,7 +17,7 @@
     "dev:debug": "OPENPETS_LOG_LEVEL=debug OPENPETS_LOG_CONSOLE=1 pnpm dev",
     "package": "pnpm build && node scripts/clean-package-output.cjs && electron-builder",
     "package:dir": "pnpm build && node scripts/clean-package-output.cjs && electron-builder --dir && node dist/check-packaging-contract.js --output",
-    "test": "node --check preload.cjs && node --check pet-preload.cjs && node dist/check-catalog-fixture.js && node dist/check-codex-pets.js && node dist/check-zip-safety.js && node dist/check-local-ipc-protocol.js && node dist/check-lease-manager.js && node dist/check-onboarding-state.js && node dist/check-update-checker.js && node dist/check-claude-memory.js && node dist/check-opencode-desktop-setup.js && node dist/check-cursor-desktop.js && node dist/check-packaging-contract.js",
+    "test": "node --check preload.cjs && node --check pet-preload.cjs && node --check pet-help-preload.cjs && node dist/check-catalog-fixture.js && node dist/check-codex-pets.js && node dist/check-zip-safety.js && node dist/check-local-ipc-protocol.js && node dist/check-lease-manager.js && node dist/check-onboarding-state.js && node dist/check-pet-memory.js && node dist/check-update-checker.js && node dist/check-claude-memory.js && node dist/check-opencode-desktop-setup.js && node dist/check-cursor-desktop.js && node dist/check-packaging-contract.js",
     "check": "pnpm typecheck && pnpm build && pnpm test",
     "typecheck": "tsc --noEmit",
     "build": "tsc"

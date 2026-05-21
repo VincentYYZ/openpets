@@ -70,7 +70,7 @@ window.addEventListener("DOMContentLoaded", () => {
       while (history.length > maxHistoryTurns) history.shift();
     } catch (error) {
       pending.className = "message assistant";
-      pending.textContent = error instanceof Error ? error.message : "请求 Claude Code 失败。";
+      pending.textContent = formatPetHelpError(error);
     } finally {
       setBusy(false, input, send, status);
       input.focus();
@@ -80,3 +80,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   setTimeout(() => input.focus(), 60);
 });
+
+function formatPetHelpError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const clean = message
+    .replace(/^Error invoking remote method 'openpets:pet-help-ask':\s*/u, "")
+    .replace(/^Error:\s*/u, "")
+    .trim();
+  return clean || "请求 Claude Code 失败。";
+}
