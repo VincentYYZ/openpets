@@ -78,20 +78,33 @@ const agentSetupSource = readFileSync(join(appDir, "src", "agent-setup.ts"), "ut
 const preloadSource = readFileSync(join(appDir, "preload.cjs"), "utf8");
 const loggerSource = readFileSync(join(appDir, "src", "logger.ts"), "utf8");
 const mainSource = readFileSync(join(appDir, "src", "main.ts"), "utf8");
+const appStateSource = readFileSync(join(appDir, "src", "app-state.ts"), "utf8");
 const petHelpServiceSource = readFileSync(join(appDir, "src", "pet-help-service.ts"), "utf8");
 const petHelpWindowSource = readFileSync(join(appDir, "src", "pet-help-window.ts"), "utf8");
 const petMemoryStoreSource = readFileSync(join(appDir, "src", "pet-memory-store.ts"), "utf8");
 const petMemoryContextSource = readFileSync(join(appDir, "src", "pet-memory-context.ts"), "utf8");
+const renderModeSource = readFileSync(join(appDir, "src", "render-mode.ts"), "utf8");
+const renderMetricsSource = readFileSync(join(appDir, "src", "render-metrics.ts"), "utf8");
 const localIpcSourceForLogging = readFileSync(join(appDir, "src", "local-ipc.ts"), "utf8");
 const localIpcPathsSource = readFileSync(join(appDir, "src", "local-ipc-paths.ts"), "utf8");
 const leaseManagerSource = readFileSync(join(appDir, "src", "lease-manager.ts"), "utf8");
 
 assert.match(mainSource, /process\.platform === "win32"[\s\S]*?OPENPETS_ENABLE_WINDOWS_GPU[\s\S]*?app\.disableHardwareAcceleration\(\)/, "Windows desktop pet rendering must default to software compositing to avoid transparent-window Chromium tile memory exhaustion.");
+assert.match(mainSource, /startRenderMetricsSampler\(useWindowsSoftwareCompositing\)/, "desktop startup must support opt-in render metrics sampling for Windows transparent-window diagnostics.");
+assert.match(renderModeSource, /OPENPETS_WINDOWS_RENDER_MODE[\s\S]*?low-power[\s\S]*?balanced[\s\S]*?full/, "Windows render mode must support low-power, balanced, and full modes.");
+assert.match(renderMetricsSource, /OPENPETS_RENDER_METRICS[\s\S]*?getProcessMemoryInfo[\s\S]*?app\.getAppMetrics\(\)[\s\S]*?BrowserWindow\.getAllWindows\(\)/, "render metrics must be opt-in and collect Electron process metrics, main-process memory, and window counts.");
+assert.match(appStateSource, /windowsRenderMode[\s\S]*?normalizeWindowsRenderMode/, "Windows render mode must be a persisted app preference.");
+assert.match(windowsSource, /id="windows-render-mode"[\s\S]*?low-power[\s\S]*?balanced[\s\S]*?full/, "Settings must expose Windows activity mode choices.");
+assert.match(windowsSource, /windowsRenderMode[\s\S]*?refreshDefaultPetRuntimePreferences\(\)/, "Changing Windows activity mode must refresh the live default pet runtime.");
+assert.match(preloadSource, /bindWindowsRenderModeSelect[\s\S]*?updatePreferences\(\{ windowsRenderMode: value \}\)/, "Settings preload must bind and persist Windows activity mode.");
 const defaultPetControllerSource = readFileSync(join(appDir, "src", "default-pet-controller.ts"), "utf8");
 const agentPetControllerSourceForLogging = readFileSync(join(appDir, "src", "agent-pet-controller.ts"), "utf8");
 const mappingDoc = readFileSync(join(repoRoot, "docs", "mapping.md"), "utf8");
-assert.match(defaultPetControllerSource, /process\.platform !== "win32"[\s\S]*?OPENPETS_WINDOWS_RENDER_MODE[\s\S]*?baseAutoWalkTickMs = windowsFullAutoWalk \? 48 : 140[\s\S]*?baseAutoWalkSpeedPx = windowsFullAutoWalk \? 3 : 8[\s\S]*?function getAutoWalkTickMs[\s\S]*?preferences\.petWalkSpeed/, "Windows desktop pets must keep auto-walk enabled but reduce transparent layered window move frequency by default and lower move frequency when walking speed is reduced.");
-assert.match(petWindowSource, /process\.platform !== "win32"[\s\S]*?OPENPETS_WINDOWS_RENDER_MODE[\s\S]*?petFrameDurationMultiplier = windowsFullPetAnimation \? 1 : 1\.8[\s\S]*?function getPetFrameAnimationCss[\s\S]*?calc\(var\(--sprite-duration\) \* \$\{petFrameDurationMultiplier\}\)/, "Windows desktop pet windows must keep spritesheet animation enabled but slow frame repainting by default.");
+assert.match(defaultPetControllerSource, /lowPowerAutoWalkTickMs[\s\S]*?lowPowerAutoWalkSpeedPx[\s\S]*?function startDefaultPetAutoWalk[\s\S]*?setTimeout\(stepDefaultPetAutoWalk, getAutoWalkTickMs\(\)\)[\s\S]*?function stepDefaultPetAutoWalk[\s\S]*?dispatchPetBehaviorEvent\(\{[\s\S]*?type: "tick"[\s\S]*?speedPx: getAutoWalkSpeedPx\(\)/, "Windows low-power mode must keep the pet continuously walking with a reduced movement cadence.");
+assert.match(defaultPetControllerSource, /function getAutoWalkTickMs[\s\S]*?lowPower: lowPowerAutoWalkTickMs[\s\S]*?function getAutoWalkSpeedPx[\s\S]*?lowPower: lowPowerAutoWalkSpeedPx[\s\S]*?function getEffectiveWindowsRenderMode\(\)[\s\S]*?getWindowsRenderMode\(getAppStateSnapshot\(\)\.preferences\.windowsRenderMode\)/, "Windows auto-walk cadence and speed must remain mode-aware and preference-aware.");
+assert.doesNotMatch(readFileSync(join(appDir, "src", "pet-behavior-machine.ts"), "utf8"), /case "settle"/, "low-power walking must not alternate between walk and idle states.");
+assert.match(petWindowSource, /function createPetWindowCss[\s\S]*?getCurrentWindowsRenderMode\(\)[\s\S]*?idlePlayState[\s\S]*?"paused"[\s\S]*?function createSpriteRule[\s\S]*?animation-play-state: \$\{playState\}/, "Windows desktop pet windows must pause idle animation in low-power mode.");
+assert.match(petWindowSource, /function getPetFrameAnimationCss[\s\S]*?getPetFrameDurationMultiplier\(renderMode\)[\s\S]*?function getPetFrameDurationMultiplier[\s\S]*?renderMode === "low-power"\) return 2\.4[\s\S]*?renderMode === "full"\) return 1/, "Windows desktop pet windows must dynamically slow sprite repainting in low-power mode.");
 assert.match(loggerSource, /openpets\.log/, "desktop logger must write a user-sendable openpets.log file.");
 assert.match(loggerSource, /openpets\.previous\.log/, "desktop logger must retain a previous log file for bug reports.");
 assert.match(loggerSource, /OPENPETS_LOG_LEVEL/, "desktop logger must support verbose dev logging via environment.");
@@ -124,7 +137,7 @@ assert.match(reactionAnimationMappingSource, /columns:\s*8/, "default pet render
 assert.match(reactionAnimationMappingSource, /rows:\s*9/, "default pet renderer must keep the real catalog sprite sheet row count.");
 assert.match(reactionAnimationMappingSource, /frameWidth:\s*192/, "default pet renderer must keep the universal Codex frame width.");
 assert.match(reactionAnimationMappingSource, /frameHeight:\s*208/, "default pet renderer must keep the universal Codex frame height.");
-assert.ok(petWindowSource.includes("defaultPetSprite.frameWidth * defaultPetSprite.columns") && petWindowSource.includes("defaultPetSprite.frameHeight * defaultPetSprite.rows"), "pet renderer must derive universal spritesheet dimensions from frame size and row/column counts.");
+assert.ok(petWindowSource.includes("scaledSheetWidth = scaledFrameWidth * defaultPetSprite.columns") && petWindowSource.includes("scaledSheetHeight = scaledFrameHeight * defaultPetSprite.rows"), "pet renderer must derive scaled universal spritesheet dimensions from frame size and row/column counts.");
 for (const state of ["idle", "running-right", "running-left", "waving", "jumping", "failed", "waiting", "running", "review"]) {
   assert.match(reactionAnimationMappingSource, new RegExp(`["']?${state}["']?:\\s*\\{\\s*row:`), `pet renderer must define universal sprite state: ${state}`);
 }
@@ -234,8 +247,8 @@ assert.match(windowsSource, /@keyframes pm-sprite-wave/, "Pet Manager must defin
 assert.match(windowsSource, /@keyframes pm-sprite-happy/, "Pet Manager must define happy row animation keyframes.");
 assert.match(petWindowSource, /max-width:\s*min\(220px/, "very long message bubbles must stay capped within the tight pet window.");
 assert.match(petWindowSource, /-webkit-line-clamp:\s*8/, "very long message bubbles must allow enough visible lines.");
-assert.match(petWindowSource, /createSpriteStateCss\("\.sprite"\)/, "built-in sprite CSS must react to reaction state.");
-assert.match(petWindowSource, /createSpriteStateCss\("\.installed-sprite"\)/, "installed sprite CSS must react to reaction state.");
+assert.match(petWindowSource, /createSpriteStateCss\("\.sprite", scaledFrameHeight, renderMode\)/, "built-in sprite CSS must react to reaction state.");
+assert.match(petWindowSource, /createSpriteStateCss\("\.installed-sprite", scaledFrameHeight, renderMode\)/, "installed sprite CSS must react to reaction state.");
 assert.match(petWindowSource, /html\[data-motion-state=\"\$\{motion\}\"\] \$\{selector\}/, "sprite CSS must let drag motion override reaction state.");
 assert.match(petWindowSource, /\.sprite, \.installed-sprite, \.bubble/, "reduced-motion CSS must include built-in and installed sprites.");
 assert.match(petWindowSource, /function createAgentPetWindow[\s\S]*?installMotionStatePublisher\(window\)/, "agent pet windows must publish motion state so dragged non-default pets run.");

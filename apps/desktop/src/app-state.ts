@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join } from "node:path";
 
 import { app } from "electron";
 
-import { defaultPetScale, defaultPetWalkSpeed, markOnboardingCompleted, maxPetWalkSpeed, minPetWalkSpeed, normalizeOnboardingCompleted, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, type PetScaleValue } from "./app-state-core.js";
+import { defaultPetScale, defaultPetWalkSpeed, defaultWindowsRenderMode, markOnboardingCompleted, maxPetWalkSpeed, minPetWalkSpeed, normalizeOnboardingCompleted, normalizePetScale, normalizePetWalkSpeed, normalizeWindowsRenderMode, petScaleOptions, petWalkSpeedStep, type PetScaleValue, type WindowsRenderMode } from "./app-state-core.js";
 import { builtInPet } from "./built-in-pet.js";
 import type { Point } from "./display.js";
 import { normalizeAppLanguage, type AppLanguage } from "./i18n.js";
@@ -52,6 +52,7 @@ export interface OpenPetsStateV1 {
     readonly speechBubblesEnabled: boolean;
     readonly petScale: number;
     readonly petWalkSpeed: number;
+    readonly windowsRenderMode: WindowsRenderMode;
     readonly reactionAnimationOverrides?: ReactionAnimationOverrides;
     readonly onboardingCompleted: boolean;
     readonly claudeCommandPath?: string;
@@ -66,7 +67,7 @@ export interface OpenPetsStateV1 {
   };
 }
 
-export { defaultPetScale, defaultPetWalkSpeed, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, type PetScaleValue };
+export { defaultPetScale, defaultPetWalkSpeed, defaultWindowsRenderMode, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, normalizeWindowsRenderMode, petScaleOptions, petWalkSpeedStep, type PetScaleValue, type WindowsRenderMode };
 
 const stateFileName = "openpets-state.json";
 const directInstallLockName = ".install-pet.lock";
@@ -338,6 +339,7 @@ function normalizePreferences(value: Partial<OpenPetsStateV1["preferences"]>): O
     speechBubblesEnabled: true,
     petScale: normalizePetScale(value.petScale),
     petWalkSpeed: normalizePetWalkSpeed(value.petWalkSpeed),
+    windowsRenderMode: normalizeWindowsRenderMode(value.windowsRenderMode),
     reactionAnimationOverrides: normalizeReactionAnimationOverrides(value.reactionAnimationOverrides),
     onboardingCompleted: normalizeOnboardingCompleted(value),
     claudeCommandPath: normalizeCommandPath(value.claudeCommandPath),
@@ -424,6 +426,7 @@ function createDefaultState(): OpenPetsStateV1 {
       speechBubblesEnabled: true,
       petScale: defaultPetScale,
       petWalkSpeed: defaultPetWalkSpeed,
+      windowsRenderMode: defaultWindowsRenderMode,
       reactionAnimationOverrides: undefined,
       onboardingCompleted: false,
       claudeCommandPath: undefined,

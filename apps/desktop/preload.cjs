@@ -163,6 +163,11 @@ const zhCnExactText = Object.freeze({
   "Constraint": "约束",
   "Pet scale": "宠物大小",
   "Pet walking speed": "宠物移动速度",
+  "Windows activity mode": "Windows 活动模式",
+  "Low-power continuous walk": "低耗连续走动",
+  "Light movement": "轻微活动",
+  "Full animation": "完整动画",
+  "Keeps the pet moving slowly on Windows while reducing transparent-window memory growth.": "在 Windows 上让宠物慢速走动，同时降低透明窗口内存增长。",
   "Normal": "正常",
   "Tiny": "微型",
   "Small": "小",
@@ -209,11 +214,14 @@ const zhCnExactText = Object.freeze({
   "Couldn’t update launch at login. Try again.": "无法更新登录启动设置，请重试。",
   "Saving scale…": "正在保存大小…",
   "Saving walking speed…": "正在保存移动速度…",
+  "Saving Windows activity mode…": "正在保存 Windows 活动模式…",
+  "Windows activity mode saved": "Windows 活动模式已保存",
   "Saving language…": "正在保存语言…",
   "Language preference saved.": "语言偏好已保存。",
   "Couldn’t save language. Try again.": "无法保存语言，请重试。",
   "Couldn’t save pet scale. Try again.": "无法保存宠物大小，请重试。",
   "Couldn’t save walking speed. Try again.": "无法保存移动速度，请重试。",
+  "Couldn’t save Windows activity mode. Try again.": "无法保存 Windows 活动模式，请重试。",
   "Saving…": "保存中…",
   "Refreshing…": "刷新中…",
   "Replacing…": "替换中…",
@@ -1982,23 +1990,29 @@ function renderSettings(state) {
   const scale = requireElement("pet-scale-value");
   const walkSpeedInput = requireInput("pet-walk-speed");
   const walkSpeedValue = requireElement("pet-walk-speed-value");
+  const windowsRenderModeSelect = requireSelect("windows-render-mode");
+  const windowsRenderModeValue = requireElement("windows-render-mode-value");
   const status = requireElement("settings-status");
 
   languageSelect.value = state.preferences.language;
   openOnLaunch.checked = state.preferences.openDefaultPetOnLaunch;
   scaleSelect.value = String(state.preferences.petScale);
   walkSpeedInput.value = String(state.preferences.petWalkSpeed);
+  windowsRenderModeSelect.value = state.preferences.windowsRenderMode;
   languageSelect.disabled = false;
   openOnLaunch.disabled = false;
   scaleSelect.disabled = false;
   walkSpeedInput.disabled = false;
+  windowsRenderModeSelect.disabled = false;
   scale.textContent = `${scaleLabelFor(state.preferences.petScale)} (${state.preferences.petScale}x)`;
   walkSpeedValue.textContent = walkSpeedLabelFor(state.preferences.petWalkSpeed);
+  windowsRenderModeValue.textContent = windowsRenderModeLabelFor(state.preferences.windowsRenderMode);
 
   bindLanguageSelect(languageSelect, state.preferences.language);
   bindCheckbox(openOnLaunch, "openDefaultPetOnLaunch", "Launch preference saved.");
   bindScaleSelect(scaleSelect, String(state.preferences.petScale));
   bindWalkSpeedSlider(walkSpeedInput, walkSpeedValue, state.preferences.petWalkSpeed);
+  bindWindowsRenderModeSelect(windowsRenderModeSelect, state.preferences.windowsRenderMode);
   bindLaunchAtLogin(launchAtLogin, launchAtLoginDetail);
   bindUpdateControls();
   void renderPetMemorySettings().catch(renderCaughtError);
@@ -2453,12 +2467,41 @@ function bindWalkSpeedSlider(input, valueLabel, currentValue) {
   };
 }
 
+function bindWindowsRenderModeSelect(select, currentValue) {
+  select.onchange = () => {
+    const previous = currentValue;
+    const value = select.value;
+    select.disabled = true;
+    const status = requireElement("settings-status");
+    status.textContent = "Saving Windows activity mode…";
+    localizeDocument();
+    void api.updatePreferences({ windowsRenderMode: value }).then(async () => {
+      await renderCurrentState("settings");
+      requireElement("settings-status").textContent = `Windows activity mode saved: ${windowsRenderModeLabelFor(value)}.`;
+      localizeDocument();
+    }).catch((error) => {
+      select.value = previous;
+      select.disabled = false;
+      status.textContent = "Couldn’t save Windows activity mode. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+}
+
 function scaleLabelFor(value) {
   if (value === 0.32) return "Tiny";
   if (value === 0.44) return "Small";
   if (value === 0.56) return "Medium";
   if (value === 0.72) return "Large";
   return "Custom";
+}
+
+function windowsRenderModeLabelFor(value) {
+  if (value === "low-power") return "Low-power continuous walk";
+  if (value === "balanced") return "Light movement";
+  if (value === "full") return "Full animation";
+  return "Low-power continuous walk";
 }
 
 function walkSpeedLabelFor(value) {
@@ -2542,6 +2585,7 @@ function isStateSnapshot(value) {
     && typeof value.preferences.speechBubblesEnabled === "boolean"
     && typeof value.preferences.petScale === "number"
     && typeof value.preferences.petWalkSpeed === "number"
+    && (value.preferences.windowsRenderMode === "low-power" || value.preferences.windowsRenderMode === "balanced" || value.preferences.windowsRenderMode === "full")
     && typeof value.preferences.onboardingCompleted === "boolean";
 }
 

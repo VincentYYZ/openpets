@@ -6,6 +6,8 @@ let lastInteractiveHit = null;
 let dragging = false;
 let folderDraggingOverPet = false;
 let folderDragLeaveTimer = null;
+let lastMouseScreenX = null;
+let lastMouseScreenY = null;
 const dropTargetPaddingPx = 12;
 const folderDragLeaveDelayMs = 90;
 
@@ -74,6 +76,22 @@ ipcRenderer.on("openpets:pet-content-state", (_event, state) => {
     document.documentElement.dataset.motionState = state.motionState;
     document.documentElement.dataset.reactionState = state.reactionState;
     document.body.innerHTML = state.bodyHtml;
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", apply, { once: true });
+  } else {
+    apply();
+  }
+});
+
+ipcRenderer.on("openpets:pet-visual-offset-x", (_event, offsetX) => {
+  if (typeof offsetX !== "number" || !Number.isFinite(offsetX)) {
+    return;
+  }
+
+  const apply = () => {
+    document.documentElement.style.setProperty("--pet-frame-offset-x", `${Math.round(offsetX)}px`);
   };
 
   if (document.readyState === "loading") {
@@ -250,13 +268,22 @@ const setInteractiveHit = (interactive, source = "mouse") => {
 };
 
 const updateInteractiveHit = (event) => {
+  const screenX = typeof event.screenX === "number" ? event.screenX : null;
+  const screenY = typeof event.screenY === "number" ? event.screenY : null;
+  const mousePositionChanged = screenX !== null && screenY !== null && lastMouseScreenX !== null && lastMouseScreenY !== null && (screenX !== lastMouseScreenX || screenY !== lastMouseScreenY);
+  lastMouseScreenX = screenX;
+  lastMouseScreenY = screenY;
+
   if (dragging) {
     setInteractiveHit(true, "mouse");
     return;
   }
   const kind = getHoverHitKind(event);
-  if (kind === "pet") setInteractiveHit(true, "mouse");
-  else if (kind === "drop-zone" && event.buttons !== 0) setInteractiveHit(true, "drop-zone");
+  if (kind === "pet") {
+    if (mousePositionChanged) setInteractiveHit(true, "mouse");
+    return;
+  }
+  if (kind === "drop-zone" && event.buttons !== 0) setInteractiveHit(true, "drop-zone");
   else setInteractiveHit(false, "mouse");
 };
 
@@ -265,12 +292,16 @@ ipcRenderer.on("openpets:pet-probe-hit-test", (_event, point) => {
   const clientX = point.clientX;
   const clientY = point.clientY;
   const target = document.elementFromPoint(clientX, clientY);
-  reportInteractiveHit(Boolean(target && target.closest(".pet-shell, .bubble")) || dragging, typeof point.reason === "string" ? point.reason.slice(0, 80) : "probe", true);
+  const hit = Boolean(target && target.closest(".pet-shell, .bubble")) || dragging;
+  if (hit && !dragging && lastInteractiveHit !== true) return;
+  reportInteractiveHit(hit, typeof point.reason === "string" ? point.reason.slice(0, 80) : "probe", true);
 });
 
 const installMouseInterop = () => {
   lastInteractiveHit = null;
   lastInteractiveSource = "mouse";
+  lastMouseScreenX = null;
+  lastMouseScreenY = null;
   dragging = false;
   folderDraggingOverPet = false;
   clearFolderDragLeaveTimer();

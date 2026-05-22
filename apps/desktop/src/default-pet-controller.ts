@@ -9,9 +9,10 @@ import { createInitialPetBehaviorState, reducePetBehavior, type PetBehaviorComma
 import { defaultPetWindowSize, getDefaultPetInitialPosition, type Point } from "./display.js";
 import { debug, error as logError, info } from "./logger.js";
 import { transientDisplayMs, type OpenPetsReaction } from "./local-ipc-protocol.js";
-import { clearTransientReaction, createDefaultPetWindow, getDefaultPetSpriteBounds, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetMotionState, setPetReactionState, setPetWindowPosition, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
+import { clearTransientReaction, createDefaultPetWindow, getDefaultPetSpriteBounds, getSafeDefaultPetPosition, getTransientDisplayDurationMs, getTransientReactionAnimationMs, loadDefaultPetContent, mergePetTransientDisplay, readWindowPosition, setPetMotionState, setPetReactionState, setPetVisualOffsetX, setPetWindowPosition, type PetStatusBadgeReaction, type PetTransientDisplay } from "./pet-window.js";
 import { openPetHelpWindow, setPetHelpWindowVisibilityChangedHandler, updatePetHelpWindowAnchor } from "./pet-help-window.js";
 import { openPetReminderWindow, setPetReminderWindowVisibilityChangedHandler, updatePetReminderWindowAnchor } from "./pet-reminder-window.js";
+import { getWindowsRenderMode } from "./render-mode.js";
 import { pickReactionMessage } from "./reaction-messages.js";
 
 let defaultPetWindow: BrowserWindow | null = null;
@@ -34,16 +35,23 @@ let currentAnimationState: ResolvedPetAnimationState = {
   motionState: "idle",
   reactionState: "idle",
 };
+let defaultPetLogicalPosition: Point | null = null;
+let defaultPetNativePosition: Point | null = null;
+let defaultPetPendingNativePosition: Point | null = null;
 let displayGeneration = 0;
 let petInteractive = false;
 let lastAmbientSpeechAt = 0;
 const busyStatusBadgeMs = 120_000;
 const waitingStatusBadgeMs = 15_000;
-const windowsFullAutoWalk = process.platform !== "win32" || process.env.OPENPETS_WINDOWS_RENDER_MODE === "full" || process.env.OPENPETS_ENABLE_WINDOWS_AUTO_WALK === "1";
-const baseAutoWalkTickMs = windowsFullAutoWalk ? 48 : 140;
-const baseAutoWalkSpeedPx = windowsFullAutoWalk ? 3 : 8;
+const fullAutoWalkTickMs = 48;
+const balancedAutoWalkTickMs = 140;
+const lowPowerAutoWalkTickMs = 240;
+const fullAutoWalkSpeedPx = 3;
+const balancedAutoWalkSpeedPx = 8;
+const lowPowerAutoWalkSpeedPx = 5;
 const autoWalkResumeAfterDragMs = 1200;
 const autoWalkEdgePaddingPx = 12;
+const lowPowerNativeWindowCommitThresholdPx = 24;
 const folderDragPromptMessage = "把文件或文件夹交给我，我来叫 Claude Code。";
 const folderDragPreviewTimeoutMs = 500;
 const petHelpBusyReactionGuardMs = 1500;
@@ -78,10 +86,12 @@ export function hideDefaultPet(): void {
     return;
   }
 
-  info("pet.default", "hide requested", { windowId: defaultPetWindow.id, position: readWindowPosition(defaultPetWindow), petId: getAppStateSnapshot().preferences.defaultPetId });
+  const position = flushDefaultPetVisualOffset("hide");
+  info("pet.default", "hide requested", { windowId: defaultPetWindow.id, position, petId: getAppStateSnapshot().preferences.defaultPetId });
   stopDefaultPetAutoWalk();
   clearPetInteractiveState();
-  setDefaultPetPosition(readWindowPosition(defaultPetWindow));
+  setTrackedDefaultPetPosition(position);
+  setDefaultPetPosition(position);
   defaultPetWindow.hide();
 }
 
@@ -98,6 +108,7 @@ export function setDefaultPetPaused(nextPaused: boolean): void {
     return;
   }
 
+  flushDefaultPetVisualOffset("pause-changed");
   void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken(), currentAnimationState.motionState, currentAnimationState.reactionState);
   if (paused) stopDefaultPetAutoWalk();
   else startDefaultPetAutoWalk();
@@ -115,7 +126,15 @@ export function refreshDefaultPetContent(): void {
 
   currentAnimationState = resolveCurrentAnimationState();
   debug("pet.default", "refresh content", { windowId: defaultPetWindow.id, paused, hasDisplay: Boolean(transientDisplay), badge: statusBadge, petId: getAppStateSnapshot().preferences.defaultPetId });
+  flushDefaultPetVisualOffset("refresh-content");
   void loadDefaultPetContent(defaultPetWindow, paused, transientDisplay, statusBadge, getCurrentDismissToken(), currentAnimationState.motionState, currentAnimationState.reactionState);
+}
+
+export function refreshDefaultPetRuntimePreferences(): void {
+  stopDefaultPetAutoWalk();
+  currentAnimationState = resolveCurrentAnimationState();
+  refreshDefaultPetContent();
+  startDefaultPetAutoWalk();
 }
 
 export function applyExternalPetReaction(reaction: OpenPetsReaction): { readonly shown: boolean; readonly reason?: string } {
@@ -181,16 +200,46 @@ export function destroyDefaultPet(): void {
 
   if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
     debug("pet.default", "destroy skipped", { reason: "no-window" });
+    defaultPetLogicalPosition = null;
+    defaultPetNativePosition = null;
+    defaultPetPendingNativePosition = null;
     defaultPetWindow = null;
     return;
   }
 
-  info("pet.default", "destroy requested", { windowId: defaultPetWindow.id, position: readWindowPosition(defaultPetWindow), petId: getAppStateSnapshot().preferences.defaultPetId });
-  setDefaultPetPosition(readWindowPosition(defaultPetWindow));
+  const position = flushDefaultPetVisualOffset("destroy");
+  info("pet.default", "destroy requested", { windowId: defaultPetWindow.id, position, petId: getAppStateSnapshot().preferences.defaultPetId });
+  setDefaultPetPosition(position);
   const window = defaultPetWindow;
   defaultPetWindow = null;
+  defaultPetLogicalPosition = null;
+  defaultPetNativePosition = null;
+  defaultPetPendingNativePosition = null;
   window.setIgnoreMouseEvents(false);
   window.destroy();
+}
+
+function recreateDefaultPetWindow(position: Point, reason: string): void {
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
+    return;
+  }
+
+  const previousWindow = defaultPetWindow;
+  const wasVisible = previousWindow.isVisible();
+  info("pet.default", "recreate window", { windowId: previousWindow.id, reason, position, wasVisible, petId: getAppStateSnapshot().preferences.defaultPetId });
+  setDefaultPetPosition(position);
+  clearPetInteractiveState();
+  stopDefaultPetAutoWalk();
+  previousWindow.setIgnoreMouseEvents(false);
+  defaultPetWindow = null;
+  previousWindow.destroy();
+  const nextWindow = getOrCreateDefaultPetWindow();
+  setPetWindowPosition(nextWindow, position, false);
+  syncHelperWindowAnchors();
+  if (wasVisible) {
+    nextWindow.showInactive();
+    startDefaultPetAutoWalk();
+  }
 }
 
 export function installDefaultPetDisplayHandlers(): void {
@@ -208,6 +257,7 @@ function handleBubbleDismissed(dismissToken: string): void {
   clearDefaultPetDisplayTimers();
   currentAnimationState = resolveCurrentAnimationState();
   if (defaultPetWindow && !defaultPetWindow.isDestroyed()) {
+    flushDefaultPetVisualOffset("bubble-dismissed");
     void loadDefaultPetContent(defaultPetWindow, paused, null, null, undefined, currentAnimationState.motionState, currentAnimationState.reactionState);
   }
   scheduleAmbientSpeech();
@@ -226,6 +276,9 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
 
   currentAnimationState = resolveCurrentAnimationState();
   const position = getSafeDefaultPetPosition(getDefaultPetPosition());
+  defaultPetLogicalPosition = position;
+  defaultPetNativePosition = position;
+  defaultPetPendingNativePosition = null;
 
   defaultPetWindow = createDefaultPetWindow({
     position,
@@ -258,18 +311,102 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     clearAmbientSpeechTimer();
     clearFolderDragPreviewTimeout();
     clearPetInteractiveState();
+    defaultPetLogicalPosition = null;
+    defaultPetNativePosition = null;
+    defaultPetPendingNativePosition = null;
     defaultPetWindow = null;
   });
 
   return defaultPetWindow;
 }
 
+function getTrackedDefaultPetPosition(): Point {
+  if (defaultPetLogicalPosition) {
+    return defaultPetLogicalPosition;
+  }
+
+  const position = defaultPetWindow && !defaultPetWindow.isDestroyed()
+    ? readWindowPosition(defaultPetWindow)
+    : getSafeDefaultPetPosition(getDefaultPetPosition());
+  defaultPetLogicalPosition = position;
+  defaultPetNativePosition = position;
+  return position;
+}
+
+function setTrackedDefaultPetPosition(position: Point): void {
+  defaultPetLogicalPosition = position;
+  defaultPetNativePosition = position;
+  defaultPetPendingNativePosition = null;
+}
+
+function flushDefaultPetVisualOffset(reason: string): Point {
+  const position = getTrackedDefaultPetPosition();
+
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
+    defaultPetNativePosition = position;
+    defaultPetPendingNativePosition = null;
+    return position;
+  }
+
+  const nativePosition = defaultPetNativePosition ?? readWindowPosition(defaultPetWindow);
+  const offsetX = position.x - nativePosition.x;
+  if (offsetX !== 0 || position.y !== nativePosition.y) {
+    debug("pet.default", "flush visual offset", { windowId: defaultPetWindow.id, reason, position, nativePosition, offsetX });
+    setPetWindowPosition(defaultPetWindow, position, false);
+  }
+  setPetVisualOffsetX(defaultPetWindow, 0);
+  defaultPetNativePosition = position;
+  defaultPetPendingNativePosition = null;
+  return position;
+}
+
+function moveDefaultPetWindowX(nextX: number): void {
+  if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
+    return;
+  }
+
+  const logicalPosition = getTrackedDefaultPetPosition();
+  const nextPosition = { x: nextX, y: logicalPosition.y } satisfies Point;
+
+  if (!isWindowsLowPowerAutoWalk()) {
+    setPetWindowPosition(defaultPetWindow, nextPosition, false);
+    setPetVisualOffsetX(defaultPetWindow, 0);
+    defaultPetLogicalPosition = nextPosition;
+    defaultPetNativePosition = nextPosition;
+    defaultPetPendingNativePosition = null;
+    return;
+  }
+
+  defaultPetLogicalPosition = nextPosition;
+  const nativePosition = defaultPetNativePosition ?? readWindowPosition(defaultPetWindow);
+  const offsetX = nextPosition.x - nativePosition.x;
+  setPetVisualOffsetX(defaultPetWindow, offsetX);
+
+  if (Math.abs(offsetX) < lowPowerNativeWindowCommitThresholdPx) {
+    return;
+  }
+
+  debug("pet.default", "commit low-power native move", { windowId: defaultPetWindow.id, nextPosition, nativePosition, offsetX });
+  setPetWindowPosition(defaultPetWindow, nextPosition, false);
+  setPetVisualOffsetX(defaultPetWindow, 0);
+  defaultPetNativePosition = nextPosition;
+  defaultPetPendingNativePosition = nextPosition;
+}
+
 function handleDefaultPetPositionChanged(position: Point): void {
-  setDefaultPetPosition(position);
+  setDefaultPetPosition(defaultPetLogicalPosition ?? position);
   syncHelperWindowAnchors();
 }
 
-function handleDefaultPetMoved(_position: Point): void {
+function handleDefaultPetMoved(position: Point): void {
+  defaultPetNativePosition = position;
+  if (defaultPetPendingNativePosition && defaultPetPendingNativePosition.x === position.x && defaultPetPendingNativePosition.y === position.y) {
+    defaultPetPendingNativePosition = null;
+  }
+  if (!defaultPetPendingNativePosition && defaultPetWindow && !defaultPetWindow.isDestroyed()) {
+    defaultPetLogicalPosition = position;
+    setPetVisualOffsetX(defaultPetWindow, 0);
+  }
   syncHelperWindowAnchors();
 }
 
@@ -457,8 +594,7 @@ function executePetBehaviorCommands(commands: readonly PetBehaviorCommand[]): vo
           break;
         }
 
-        const position = readWindowPosition(defaultPetWindow);
-        setPetWindowPosition(defaultPetWindow, { x: command.x, y: position.y }, false);
+        moveDefaultPetWindowX(command.x);
         break;
       }
       default:
@@ -478,6 +614,9 @@ function handlePetInteractiveChanged(interactive: boolean, source?: string): voi
 
   petInteractive = interactive;
   debug("pet.default", "interactive changed", { interactive, source, mode: behaviorState.mode });
+  if (interactive) {
+    flushDefaultPetVisualOffset("interactive-enter");
+  }
   dispatchPetBehaviorEvent({ type: interactive ? "pointer-enter" : "pointer-leave" });
 
   if (interactive) {
@@ -500,6 +639,7 @@ function clearPetInteractiveState(): void {
 }
 
 function handlePetDragStarted(): void {
+  flushDefaultPetVisualOffset("drag-start");
   dispatchPetBehaviorEvent({ type: "drag-start", now: Date.now() });
   stopDefaultPetAutoWalk();
   clearAmbientSpeechTimer();
@@ -511,6 +651,7 @@ function handlePetDragEnded(): void {
 }
 
 function handleFolderDragEntered(): void {
+  flushDefaultPetVisualOffset("folder-drag-enter");
   scheduleFolderDragPreviewTimeout();
   dispatchPetBehaviorEvent({ type: "folder-drag-enter" });
   stopDefaultPetAutoWalk();
@@ -780,6 +921,9 @@ function getAmbientSpeechReaction(): OpenPetsReaction | null {
   if (behaviorState.mode === "hovered") {
     return "waving";
   }
+  if (isWindowsLowPowerAutoWalk()) {
+    return null;
+  }
   if (behaviorState.mode === "walk-left" || behaviorState.mode === "walk-right") {
     return "idle";
   }
@@ -847,9 +991,15 @@ function reclampDefaultPetWindow(): void {
     return;
   }
 
-  const safePosition = readWindowPosition(defaultPetWindow);
+  const safePosition = flushDefaultPetVisualOffset("reclamp");
   info("pet.default", "reclamp position", { windowId: defaultPetWindow.id, position: safePosition });
+  if (process.platform === "win32") {
+    recreateDefaultPetWindow(safePosition, "display-metrics-changed");
+    return;
+  }
   setPetWindowPosition(defaultPetWindow, safePosition, false);
+  setPetVisualOffsetX(defaultPetWindow, 0);
+  setTrackedDefaultPetPosition(safePosition);
   setDefaultPetPosition(safePosition);
   syncHelperWindowAnchors();
 }
@@ -890,7 +1040,7 @@ function stepDefaultPetAutoWalk(): void {
     return;
   }
 
-  const position = readWindowPosition(defaultPetWindow);
+  const position = getTrackedDefaultPetPosition();
   const { workArea } = screen.getPrimaryDisplay();
   dispatchPetBehaviorEvent({
     type: "tick",
@@ -905,6 +1055,11 @@ function stepDefaultPetAutoWalk(): void {
 
 function getAutoWalkTickMs(): number {
   const speed = getAppStateSnapshot().preferences.petWalkSpeed;
+  const baseAutoWalkTickMs = getAutoWalkModeValue({
+    lowPower: lowPowerAutoWalkTickMs,
+    balanced: balancedAutoWalkTickMs,
+    full: fullAutoWalkTickMs,
+  });
   if (speed < 1) {
     return Math.round(baseAutoWalkTickMs / Math.max(speed, 0.2));
   }
@@ -912,7 +1067,31 @@ function getAutoWalkTickMs(): number {
 }
 
 function getAutoWalkSpeedPx(): number {
+  const baseAutoWalkSpeedPx = getAutoWalkModeValue({
+    lowPower: lowPowerAutoWalkSpeedPx,
+    balanced: balancedAutoWalkSpeedPx,
+    full: fullAutoWalkSpeedPx,
+  });
   return Math.max(1, Math.round(baseAutoWalkSpeedPx * getAppStateSnapshot().preferences.petWalkSpeed));
+}
+
+function getEffectiveWindowsRenderMode() {
+  return getWindowsRenderMode(getAppStateSnapshot().preferences.windowsRenderMode);
+}
+
+function getAutoWalkModeValue(values: { readonly lowPower: number; readonly balanced: number; readonly full: number }): number {
+  if (isWindowsLowPowerAutoWalk()) {
+    return values.lowPower;
+  }
+  return isWindowsFullAutoWalk() ? values.full : values.balanced;
+}
+
+function isWindowsLowPowerAutoWalk(): boolean {
+  return process.platform === "win32" && getEffectiveWindowsRenderMode() === "low-power";
+}
+
+function isWindowsFullAutoWalk(): boolean {
+  return process.platform !== "win32" || getEffectiveWindowsRenderMode() === "full";
 }
 
 export function shouldOpenDefaultPetOnLaunch(): boolean {
@@ -922,9 +1101,12 @@ export function shouldOpenDefaultPetOnLaunch(): boolean {
 export function resetDefaultPetToInitialPosition(): void {
   const safePosition = getSafeDefaultPetPosition(getDefaultPetInitialPosition(defaultPetWindowSize));
   resetDefaultPetPosition(safePosition);
+  defaultPetLogicalPosition = safePosition;
+  defaultPetNativePosition = safePosition;
 
   if (defaultPetWindow && !defaultPetWindow.isDestroyed()) {
     setPetWindowPosition(defaultPetWindow, safePosition, false);
+    setPetVisualOffsetX(defaultPetWindow, 0);
     syncHelperWindowAnchors();
   }
 }

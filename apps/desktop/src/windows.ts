@@ -6,10 +6,10 @@ import { app, BrowserWindow, ipcMain, protocol, type IpcMainInvokeEvent } from "
 
 import { getAgentSetupSnapshot, runAgentSetupAction, updateAgentSetupCommandPaths } from "./agent-setup.js";
 import { refreshAgentPetContent } from "./agent-pet-controller.js";
-import { completeOnboarding, getAppStateSnapshot, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, petScaleOptions, petWalkSpeedStep, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings } from "./app-state.js";
+import { completeOnboarding, getAppStateSnapshot, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, normalizeWindowsRenderMode, petScaleOptions, petWalkSpeedStep, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings, type WindowsRenderMode } from "./app-state.js";
 import { getCatalogPageUiState, getCatalogSearchUiState, getCatalogUiState } from "./catalog.js";
 import { getCodexPetsUiState, importCodexPet, readCodexPetSpritesheet } from "./codex-pets.js";
-import { refreshDefaultPetContent, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
+import { refreshDefaultPetContent, refreshDefaultPetRuntimePreferences, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
 import { clearPetMemory, deletePetMemoryFact, getPetMemorySnapshot, setPetMemoryEnabled } from "./pet-memory-store.js";
 import { installPet, removePet, setDefaultInstalledPet } from "./pet-installation.js";
 import { getHtmlLanguage, getTaskWindowDefinitions, normalizeAppLanguage, type AppLanguage } from "./i18n.js";
@@ -130,11 +130,16 @@ export function installInternalUiHandlers(): void {
     const previousState = getAppStateSnapshot();
     const previousScale = previousState.preferences.petScale;
     const previousLanguage = previousState.preferences.language;
+    const previousWindowsRenderMode = previousState.preferences.windowsRenderMode;
     const previousOverrides = JSON.stringify(previousState.preferences.reactionAnimationOverrides ?? {});
     const state = updatePreferences(validatePreferencePatch(patch));
     const nextOverrides = JSON.stringify(state.preferences.reactionAnimationOverrides ?? {});
     if (state.preferences.petScale !== previousScale || nextOverrides !== previousOverrides) {
       refreshDefaultPetContent();
+      refreshAgentPetContent();
+    }
+    if (state.preferences.windowsRenderMode !== previousWindowsRenderMode) {
+      refreshDefaultPetRuntimePreferences();
       refreshAgentPetContent();
     }
     if (state.preferences.language !== previousLanguage) {
@@ -921,6 +926,17 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
               </span>
               <input id="pet-walk-speed" class="settings-range" type="range" min="${minPetWalkSpeed}" max="${maxPetWalkSpeed}" step="${petWalkSpeedStep}" aria-label="Pet walking speed" />
             </label>
+            <label class="setting-row">
+              <span>
+                <strong>Windows activity mode</strong>
+                <small><span id="windows-render-mode-value">Low-power continuous walk</span>. Keeps the pet moving slowly on Windows while reducing transparent-window memory growth.</small>
+              </span>
+              <select id="windows-render-mode" class="settings-select" aria-label="Windows activity mode">
+                <option value="low-power">Low-power continuous walk</option>
+                <option value="balanced">Light movement</option>
+                <option value="full">Full animation</option>
+              </select>
+            </label>
             <div class="setting-row">
               <span>
                 <strong>Reset default pet position</strong>
@@ -1425,12 +1441,12 @@ async function getDefaultPetPreviewSpriteInfo(): Promise<{ readonly path: string
   return { path: builtInPath, version: `builtin-${Math.round(fallback.mtimeMs)}-${fallback.size}` };
 }
 
-function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
+function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
   if (!isRecord(value)) {
     throw new Error("Invalid preferences patch.");
   }
 
-  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
+  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
 
   if ("language" in value) {
     const language = normalizeAppLanguage(value.language);
@@ -1453,6 +1469,12 @@ function validatePreferencePatch(value: unknown): { language?: AppLanguage; open
     const speed = normalizePetWalkSpeed(value.petWalkSpeed);
     if (speed !== value.petWalkSpeed) throw new Error("Invalid pet walking speed value.");
     patch.petWalkSpeed = speed;
+  }
+
+  if ("windowsRenderMode" in value) {
+    const renderMode = normalizeWindowsRenderMode(value.windowsRenderMode);
+    if (renderMode !== value.windowsRenderMode) throw new Error("Invalid Windows activity mode value.");
+    patch.windowsRenderMode = renderMode;
   }
 
   if ("reactionAnimationOverrides" in value) {

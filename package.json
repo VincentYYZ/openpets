@@ -17,6 +17,7 @@
     "dev:desktop": "pnpm --filter @open-pets/desktop dev",
     "dev:desktop:local": "pnpm --filter @open-pets/desktop build && node scripts/run-desktop-local.mjs",
     "pets:prefetch:local": "node scripts/prefetch-pets-local.mjs",
+    "record:issue": "node scripts/record-issue.mjs",
     "package:desktop:dir": "pnpm build && pnpm --filter @open-pets/desktop package:dir",
     "package:desktop": "pnpm build && pnpm --filter @open-pets/desktop package",
     "release:desktop": "node apps/desktop/scripts/release-local.mjs",

@@ -9,6 +9,7 @@ import { builtInPet } from "./built-in-pet.js";
 import { getInstalledPetDir } from "./pet-paths.js";
 import type { OpenPetsReaction } from "./local-ipc-protocol.js";
 import { pickReactionMessage, type ReactionMessageOverrides } from "./reaction-messages.js";
+import { getWindowsRenderMode } from "./render-mode.js";
 import { debug, error as logError, info } from "./logger.js";
 import { defaultPetSprite, motionToSpriteState, resolveReactionSpriteState, type PetMotionState, type UniversalSpriteState } from "./reaction-animation-mapping.js";
 
@@ -65,12 +66,11 @@ interface PetContentRender {
 const petWindowRenderCache = new WeakMap<BrowserWindow, string>();
 const petWindowMotionStateCache = new WeakMap<BrowserWindow, PetMotionState>();
 const petWindowReactionStateCache = new WeakMap<BrowserWindow, UniversalSpriteState>();
+const petWindowVisualOffsetXCache = new WeakMap<BrowserWindow, number>();
 
 const windowLoadChains = new WeakMap<BrowserWindow, Promise<void>>();
 const windowLoadSequences = new WeakMap<BrowserWindow, number>();
 const petDropZonePadding = Object.freeze({ top: 24, right: 24, bottom: 24, left: 24 });
-const windowsFullPetAnimation = process.platform !== "win32" || process.env.OPENPETS_WINDOWS_RENDER_MODE === "full" || process.env.OPENPETS_ENABLE_WINDOWS_PET_ANIMATION === "1";
-const petFrameDurationMultiplier = windowsFullPetAnimation ? 1 : 1.8;
 const outerPetWindowSize = Object.freeze({
   width: defaultPetWindowSize.width + petDropZonePadding.left + petDropZonePadding.right,
   height: defaultPetWindowSize.height + petDropZonePadding.top + petDropZonePadding.bottom,
@@ -527,7 +527,7 @@ export function getTransientReactionAnimationMs(display: PetTransientDisplay): n
   const state = getReactionSpriteState(display.reaction);
   const row = defaultPetSprite.states[state];
   const iterations = "iterations" in row ? row.iterations : "infinite";
-  return typeof iterations === "number" ? Math.ceil(row.durationMs * iterations * petFrameDurationMultiplier) : null;
+  return typeof iterations === "number" ? Math.ceil(row.durationMs * iterations * getPetFrameDurationMultiplier(getCurrentWindowsRenderMode())) : null;
 }
 
 export function getTransientDisplayDurationMs(display: PetTransientDisplay): number {
@@ -554,6 +554,14 @@ export function setPetMotionState(window: BrowserWindow, state: PetMotionState):
   if (petWindowMotionStateCache.get(window) === state) return;
   petWindowMotionStateCache.set(window, state);
   window.webContents.send("openpets:pet-motion", state);
+}
+
+export function setPetVisualOffsetX(window: BrowserWindow, offsetX: number): void {
+  if (window.isDestroyed()) return;
+  const nextOffsetX = Math.round(offsetX);
+  if (petWindowVisualOffsetXCache.get(window) === nextOffsetX) return;
+  petWindowVisualOffsetXCache.set(window, nextOffsetX);
+  window.webContents.send("openpets:pet-visual-offset-x", nextOffsetX);
 }
 
 function tryUpdateLoadedPetContent(window: BrowserWindow, render: PetContentRender, name: string, sequence: number): boolean {
@@ -606,9 +614,14 @@ async function createDefaultPetRender(paused: boolean, display: PetTransientDisp
   const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
   const scale = getAppStateSnapshot().preferences.petScale as PetScaleValue;
+  const renderMode = getCurrentWindowsRenderMode();
+  const scaledFrameWidth = Math.ceil(defaultPetSprite.frameWidth * scale);
+  const scaledFrameHeight = Math.ceil(defaultPetSprite.frameHeight * scale);
+  const scaledSheetWidth = scaledFrameWidth * defaultPetSprite.columns;
+  const scaledSheetHeight = scaledFrameHeight * defaultPetSprite.rows;
 
   return {
-    cacheKey: `default:builtin:${paused}:${scale}`,
+    cacheKey: `default:builtin:${paused}:${scale}:${renderMode}`,
     bodyHtml,
     motionState,
     reactionState,
@@ -622,25 +635,23 @@ async function createDefaultPetRender(paused: boolean, display: PetTransientDisp
         <style>
           ${createPetWindowCss(paused, scale)}
           .sprite {
-            width: ${defaultPetSprite.frameWidth}px;
-            height: ${defaultPetSprite.frameHeight}px;
+            width: ${scaledFrameWidth}px;
+            height: ${scaledFrameHeight}px;
             background-image: url("${escapeCssUrl(spriteUrl)}");
-            background-size: ${defaultPetSprite.frameWidth * defaultPetSprite.columns}px ${defaultPetSprite.frameHeight * defaultPetSprite.rows}px;
+            background-size: ${scaledSheetWidth}px ${scaledSheetHeight}px;
             background-repeat: no-repeat;
             --sprite-row-y: 0px;
             --sprite-frames: ${stateRows.idle.frames};
             --sprite-duration: ${stateRows.idle.durationMs}ms;
             --sprite-iterations: ${stateRows.idle.iterations};
             background-position: 0 var(--sprite-row-y);
-            animation: ${getPetFrameAnimationCss()};
+            animation: ${getPetFrameAnimationCss(renderMode)};
             animation-play-state: var(--play-state);
-            transform: scale(${scale});
-            transform-origin: top left;
           }
-          ${createSpriteStateCss(".sprite")}
+          ${createSpriteStateCss(".sprite", scaledFrameHeight, renderMode)}
           @keyframes pet-frames {
             from { background-position: 0 var(--sprite-row-y); }
-            to { background-position: calc(-${defaultPetSprite.frameWidth}px * var(--sprite-frames)) var(--sprite-row-y); }
+            to { background-position: calc(-${scaledFrameWidth}px * var(--sprite-frames)) var(--sprite-row-y); }
           }
         </style>
       </head>
@@ -683,9 +694,14 @@ async function createInstalledPetRender(petId: string, displayName: string, paus
   const bodyHtml = createPetBodyMarkup(escapeHtml(displayName), createBubbleMarkup(display, paused, badge, dismissToken, reactionMessageOverrides), `<div class="installed-card" role="img" aria-label="${escapeHtml(displayName)}"><div class="installed-sprite"></div></div>`);
   const reactionState = reactionStateOverride ?? getReactionSpriteState(display?.reaction);
   const stateRows = defaultPetSprite.states;
+  const renderMode = getCurrentWindowsRenderMode();
+  const scaledFrameWidth = Math.ceil(defaultPetSprite.frameWidth * scale);
+  const scaledFrameHeight = Math.ceil(defaultPetSprite.frameHeight * scale);
+  const scaledSheetWidth = scaledFrameWidth * defaultPetSprite.columns;
+  const scaledSheetHeight = scaledFrameHeight * defaultPetSprite.rows;
 
   return {
-    cacheKey: `${cachePrefix}:${paused}:${scale}:${spritesheet.mtimeMs}:${spritesheet.size}`,
+    cacheKey: `${cachePrefix}:${paused}:${scale}:${renderMode}:${spritesheet.mtimeMs}:${spritesheet.size}`,
     bodyHtml,
     motionState,
     reactionState,
@@ -698,30 +714,28 @@ async function createInstalledPetRender(petId: string, displayName: string, paus
           <title>OpenPets Default Pet</title>
           <style>
             ${createPetWindowCss(paused, scale)}
-            .installed-card { width: ${Math.ceil(defaultPetSprite.frameWidth * scale)}px; height: ${Math.ceil(defaultPetSprite.frameHeight * scale)}px; overflow: visible; position: relative; }
+            .installed-card { width: ${scaledFrameWidth}px; height: ${scaledFrameHeight}px; overflow: visible; position: relative; }
             .installed-sprite {
               position: absolute;
               left: 0;
               top: 0;
-              width: ${defaultPetSprite.frameWidth}px;
-              height: ${defaultPetSprite.frameHeight}px;
+              width: ${scaledFrameWidth}px;
+              height: ${scaledFrameHeight}px;
               background-image: url("${escapeCssUrl(imageUrl)}");
-              background-size: ${defaultPetSprite.frameWidth * defaultPetSprite.columns}px ${defaultPetSprite.frameHeight * defaultPetSprite.rows}px;
+              background-size: ${scaledSheetWidth}px ${scaledSheetHeight}px;
               background-repeat: no-repeat;
               --sprite-row-y: 0px;
               --sprite-frames: ${stateRows.idle.frames};
               --sprite-duration: ${stateRows.idle.durationMs}ms;
               --sprite-iterations: ${stateRows.idle.iterations};
               background-position: 0 var(--sprite-row-y);
-              animation: ${getPetFrameAnimationCss()};
+              animation: ${getPetFrameAnimationCss(renderMode)};
               animation-play-state: var(--play-state);
-              transform: scale(${scale});
-              transform-origin: top left;
             }
-            ${createSpriteStateCss(".installed-sprite")}
+            ${createSpriteStateCss(".installed-sprite", scaledFrameHeight, renderMode)}
             @keyframes pet-frames {
               from { background-position: 0 var(--sprite-row-y); }
-              to { background-position: calc(-${defaultPetSprite.frameWidth}px * var(--sprite-frames)) var(--sprite-row-y); }
+              to { background-position: calc(-${scaledFrameWidth}px * var(--sprite-frames)) var(--sprite-row-y); }
             }
           </style>
         </head>
@@ -745,26 +759,33 @@ function createPetBodyMarkup(stageLabel: string, bubble: string, spriteMarkup: s
 }
 
 function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
+  const renderMode = getCurrentWindowsRenderMode();
+  const windowsLowPowerPetAnimation = isWindowsLowPowerPetAnimation(renderMode);
   const opacity = paused ? "0.62" : "1";
   const playState = paused ? "paused" : "running";
+  const idlePlayState = windowsLowPowerPetAnimation ? "paused" : playState;
+  const activePlayState = playState;
   const scaledWidth = Math.ceil(defaultPetSprite.frameWidth * scale);
   const scaledHeight = Math.ceil(defaultPetSprite.frameHeight * scale);
   const petBottom = 22;
   const bubbleBottom = Math.ceil(petBottom + scaledHeight + 8);
   const petShellFilter = process.platform === "win32" ? "none" : "drop-shadow(0 10px 12px rgba(15, 23, 42, 0.24)) drop-shadow(0 2px 3px rgba(15, 23, 42, 0.18))";
   const bubbleBackdropFilter = process.platform === "win32" ? "none" : "blur(10px)";
+  const bubbleShadow = windowsLowPowerPetAnimation ? "0 6px 14px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.82)" : "0 12px 24px rgba(15, 23, 42, 0.16), 0 2px 5px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82)";
+  const bubbleTailShadow = windowsLowPowerPetAnimation ? "none" : "3px 3px 7px rgba(15, 23, 42, 0.08)";
+  const statusPulseAnimation = windowsLowPowerPetAnimation ? "none" : "status-pulse 820ms ease-in-out infinite";
   return `
-    :root { color-scheme: dark; --pet-opacity: ${opacity}; --play-state: ${playState}; }
+    :root { color-scheme: dark; --pet-opacity: ${opacity}; --play-state: ${playState}; --idle-play-state: ${idlePlayState}; --active-play-state: ${activePlayState}; --pet-frame-offset-x: 0px; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; user-select: none; -webkit-font-smoothing: antialiased; }
     html { color: #172033; }
     body { -webkit-app-region: no-drag; pointer-events: none; }
     .stage { width: 100%; height: 100%; position: relative; box-sizing: border-box; overflow: visible; }
     .drop-zone { position: absolute; inset: 0; z-index: 0; display: block; background: transparent; pointer-events: auto; -webkit-app-region: no-drag; }
-    .pet-frame { position: absolute; left: ${petDropZonePadding.left}px; top: ${petDropZonePadding.top}px; width: ${defaultPetWindowSize.width}px; height: ${defaultPetWindowSize.height}px; box-sizing: border-box; overflow: visible; pointer-events: none; }
+    .pet-frame { position: absolute; left: calc(${petDropZonePadding.left}px + var(--pet-frame-offset-x)); top: ${petDropZonePadding.top}px; width: ${defaultPetWindowSize.width}px; height: ${defaultPetWindowSize.height}px; box-sizing: border-box; overflow: visible; pointer-events: none; }
     .pet-shell { position: absolute; left: 50%; bottom: ${petBottom}px; z-index: 1; width: ${scaledWidth}px; height: ${scaledHeight}px; display: block; opacity: var(--pet-opacity); filter: ${petShellFilter}; transform: translateX(-50%); transition-property: opacity, filter; transition-duration: 180ms; transition-timing-function: cubic-bezier(0.2, 0, 0, 1); pointer-events: auto; -webkit-app-region: no-drag; cursor: grab; }
-    .bubble { position: absolute; left: 50%; bottom: ${bubbleBottom}px; z-index: 4; box-sizing: border-box; display: inline-flex; flex-direction: column; width: fit-content; min-width: 92px; max-width: min(220px, calc(100vw - 18px)); max-height: 128px; padding: 10px 12px; background: linear-gradient(135deg, rgba(239, 246, 255, 0.97), rgba(237, 233, 254, 0.96)); color: #172033; font: 760 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 14px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16), 0 2px 5px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82); white-space: normal; overflow-wrap: break-word; word-break: normal; overflow: visible; pointer-events: auto; -webkit-app-region: no-drag; opacity: 1; backdrop-filter: ${bubbleBackdropFilter}; transform: translateX(-50%); transform-origin: 64% 100%; animation: bubble-in 180ms cubic-bezier(0.2, 0, 0, 1); }
+    .bubble { position: absolute; left: 50%; bottom: ${bubbleBottom}px; z-index: 4; box-sizing: border-box; display: inline-flex; flex-direction: column; width: fit-content; min-width: 92px; max-width: min(220px, calc(100vw - 18px)); max-height: 128px; padding: 10px 12px; background: linear-gradient(135deg, rgba(239, 246, 255, 0.97), rgba(237, 233, 254, 0.96)); color: #172033; font: 760 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 14px; box-shadow: ${bubbleShadow}; white-space: normal; overflow-wrap: break-word; word-break: normal; overflow: visible; pointer-events: auto; -webkit-app-region: no-drag; opacity: 1; backdrop-filter: ${bubbleBackdropFilter}; transform: translateX(-50%); transform-origin: 64% 100%; animation: bubble-in 180ms cubic-bezier(0.2, 0, 0, 1); }
     .bubble[data-dismiss-token] { cursor: pointer; }
-    .bubble::after { content: ""; position: absolute; left: 64%; bottom: -7px; width: 12px; height: 12px; background: inherit; border-right: 1px solid rgba(255, 255, 255, 0.56); border-bottom: 1px solid rgba(255, 255, 255, 0.56); border-bottom-right-radius: 3px; transform: translateX(-50%) rotate(45deg); box-shadow: 3px 3px 7px rgba(15, 23, 42, 0.08); }
+    .bubble::after { content: ""; position: absolute; left: 64%; bottom: -7px; width: 12px; height: 12px; background: inherit; border-right: 1px solid rgba(255, 255, 255, 0.56); border-bottom: 1px solid rgba(255, 255, 255, 0.56); border-bottom-right-radius: 3px; transform: translateX(-50%) rotate(45deg); box-shadow: ${bubbleTailShadow}; }
     .bubble-header { display: inline-flex; align-items: center; min-width: 0; gap: 7px; color: currentColor; font: 780 11px/14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0.01em; }
     .bubble-status-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; width: 18px; min-width: 18px; height: 18px; border-radius: 999px; background: #3b82f6; color: #fff; font: 900 12px/18px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(59, 130, 246, 0.3); }
     .bubble-status-icon::before { content: attr(data-icon); display: block; width: 18px; height: 18px; line-height: 18px; text-align: center; transform: none; }
@@ -784,7 +805,7 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
     .bubble.is-success .bubble-status-icon { background: #10b981; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(16, 185, 129, 0.34); }
     .bubble.is-error .bubble-status-icon { background: #ef4444; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(239, 68, 68, 0.34); }
     .bubble.is-info .bubble-status-icon { background: #38bdf8; box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.28), 0 2px 7px rgba(56, 189, 248, 0.34); }
-    .bubble.is-busy .bubble-status-icon::before { content: ""; position: absolute; inset: 0; width: 18px; height: 18px; background: radial-gradient(circle at 50% 50%, #fff 0 4px, transparent 4.5px); animation: status-pulse 820ms ease-in-out infinite; }
+    .bubble.is-busy .bubble-status-icon::before { content: ""; position: absolute; inset: 0; width: 18px; height: 18px; background: radial-gradient(circle at 50% 50%, #fff 0 4px, transparent 4.5px); animation: ${statusPulseAnimation}; }
     .bubble.is-waiting .bubble-status-icon::before { content: ""; position: absolute; left: 3px; top: 3px; box-sizing: border-box; width: 12px; height: 12px; border: 2px solid rgba(255, 255, 255, 0.96); border-top-color: rgba(255, 255, 255, 0.28); border-radius: 999px; }
     @keyframes bubble-in { from { opacity: 0; transform: translateX(-50%) translateY(4px) scale(0.96); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
     @keyframes status-pulse { 0%, 100% { opacity: 0.52; } 50% { opacity: 1; } }
@@ -792,22 +813,39 @@ function createPetWindowCss(paused: boolean, scale: PetScaleValue): string {
   `;
 }
 
-function getPetFrameAnimationCss(): string {
+function getPetFrameAnimationCss(renderMode: ReturnType<typeof getCurrentWindowsRenderMode>): string {
+  const petFrameDurationMultiplier = getPetFrameDurationMultiplier(renderMode);
   return petFrameDurationMultiplier === 1 ? "pet-frames var(--sprite-duration) steps(var(--sprite-frames)) var(--sprite-iterations)" : `pet-frames calc(var(--sprite-duration) * ${petFrameDurationMultiplier}) steps(var(--sprite-frames)) var(--sprite-iterations)`;
 }
 
-function createSpriteStateCss(selector: ".sprite" | ".installed-sprite"): string {
-  const reactionRules = Object.keys(defaultPetSprite.states).map((state) => createSpriteRule(`html[data-reaction-state="${state}"] ${selector}`, state as UniversalSpriteState));
+function createSpriteStateCss(selector: ".sprite" | ".installed-sprite", frameHeight: number, renderMode: ReturnType<typeof getCurrentWindowsRenderMode>): string {
+  const reactionRules = Object.keys(defaultPetSprite.states).map((state) => createSpriteRule(`html[data-reaction-state="${state}"] ${selector}`, state as UniversalSpriteState, frameHeight, renderMode));
   const motionRules = (Object.entries(motionToSpriteState) as Array<[PetMotionState, UniversalSpriteState]>)
     .filter(([motion]) => motion !== "idle")
-    .map(([motion, state]) => createSpriteRule(`html[data-motion-state="${motion}"] ${selector}`, state));
+    .map(([motion, state]) => createSpriteRule(`html[data-motion-state="${motion}"] ${selector}`, state, frameHeight, renderMode));
   return [...reactionRules, ...motionRules].join("\n");
 }
 
-function createSpriteRule(selector: string, state: UniversalSpriteState): string {
+function createSpriteRule(selector: string, state: UniversalSpriteState, frameHeight: number, renderMode: ReturnType<typeof getCurrentWindowsRenderMode>): string {
   const row = defaultPetSprite.states[state];
   const iterations = "iterations" in row ? row.iterations : "infinite";
-  return `${selector} { --sprite-row-y: -${row.row * defaultPetSprite.frameHeight}px; --sprite-frames: ${row.frames}; --sprite-duration: ${row.durationMs}ms; --sprite-iterations: ${iterations}; }`;
+  const playState = isWindowsLowPowerPetAnimation(renderMode) && state === "idle" ? "var(--idle-play-state)" : "var(--active-play-state)";
+  return `${selector} { --sprite-row-y: -${row.row * frameHeight}px; --sprite-frames: ${row.frames}; --sprite-duration: ${row.durationMs}ms; --sprite-iterations: ${iterations}; animation-play-state: ${playState}; }`;
+}
+
+function getCurrentWindowsRenderMode() {
+  return getWindowsRenderMode(getAppStateSnapshot().preferences.windowsRenderMode);
+}
+
+function isWindowsLowPowerPetAnimation(renderMode: ReturnType<typeof getCurrentWindowsRenderMode>): boolean {
+  return process.platform === "win32" && renderMode === "low-power";
+}
+
+function getPetFrameDurationMultiplier(renderMode: ReturnType<typeof getCurrentWindowsRenderMode>): number {
+  if (process.platform !== "win32") return 1;
+  if (renderMode === "low-power") return 2.4;
+  if (renderMode === "full") return 1;
+  return 1.8;
 }
 
 function getReactionSpriteState(reaction: OpenPetsReaction | undefined): UniversalSpriteState {

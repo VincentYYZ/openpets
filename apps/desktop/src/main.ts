@@ -1,14 +1,16 @@
 import { app } from "electron";
 import { resolve } from "node:path";
 
-import { initializeAppState, isOnboardingCompleted, releaseStartupInstallLock } from "./app-state.js";
+import { getAppStateSnapshot, initializeAppState, isOnboardingCompleted, releaseStartupInstallLock } from "./app-state.js";
 import { installDefaultPetDisplayHandlers, shouldOpenDefaultPetOnLaunch, showDefaultPet, triggerPetReminderDisplay } from "./default-pet-controller.js";
 import { initializePetMemoryStore } from "./pet-memory-store.js";
 import { initializePetReminderStore } from "./pet-reminder-store.js";
 import { startPetReminderScheduler } from "./pet-reminder-scheduler.js";
+import { startRenderMetricsSampler } from "./render-metrics.js";
 import { installAppLifecycle } from "./lifecycle.js";
 import { error as logError, getLogFilePath, info, initializeLogger } from "./logger.js";
 import { startLocalIpcServer } from "./local-ipc.js";
+import { getWindowsRenderMode } from "./render-mode.js";
 import { createAppTray, refreshTrayMenu } from "./tray.js";
 import { checkForGitHubReleaseUpdate } from "./update-checker.js";
 import { installInternalUiHandlers, installInternalUiProtocol, openTaskWindow } from "./windows.js";
@@ -51,13 +53,15 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     initializeLogger();
     app.setName("OpenPets");
-    info("app", "startup begin", { version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, pid: process.pid, ozonePlatform: app.commandLine.getSwitchValue("ozone-platform") || null, windowsSoftwareCompositing: useWindowsSoftwareCompositing });
+    info("app", "startup begin", { version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, pid: process.pid, ozonePlatform: app.commandLine.getSwitchValue("ozone-platform") || null, windowsSoftwareCompositing: useWindowsSoftwareCompositing, windowsRenderMode: getWindowsRenderMode(), renderMetrics: process.env.OPENPETS_RENDER_METRICS === "1" });
 
     if (process.platform === "darwin") {
       app.dock?.hide();
     }
 
     initializeAppState();
+    info("app", "state initialized", { windowsRenderMode: getWindowsRenderMode(getAppStateSnapshot().preferences.windowsRenderMode) });
+    startRenderMetricsSampler(useWindowsSoftwareCompositing);
     initializePetMemoryStore();
     initializePetReminderStore();
     startPetReminderScheduler((reminder) => triggerPetReminderDisplay(reminder.text));
