@@ -1097,6 +1097,48 @@ function bindAgentSetupButton(id, handler, disabled, loadingText) {
   };
 }
 
+function bindPetHelpThirdPartySettings(controls, currentConfig) {
+  controls.apiStyle.onchange = () => {
+    const previousDefault = currentConfig.apiStyle === "anthropic" ? "https://api.deepseek.com/anthropic" : "https://api.deepseek.com";
+    const nextDefault = controls.apiStyle.value === "anthropic" ? "https://api.deepseek.com/anthropic" : "https://api.deepseek.com";
+    if (!controls.baseUrl.value.trim() || controls.baseUrl.value.trim() === previousDefault) {
+      controls.baseUrl.value = nextDefault;
+    }
+  };
+
+  controls.save.onclick = () => {
+    const status = requireElement("settings-status");
+    controls.apiStyle.disabled = true;
+    controls.baseUrl.disabled = true;
+    controls.apiKey.disabled = true;
+    controls.model.disabled = true;
+    controls.save.disabled = true;
+    status.textContent = "Saving third-party API config…";
+    localizeDocument();
+    void api.updatePreferences({
+      petHelpThirdPartyConfig: {
+        apiStyle: controls.apiStyle.value,
+        baseUrl: controls.baseUrl.value,
+        apiKey: controls.apiKey.value,
+        model: controls.model.value,
+      },
+    }).then(async () => {
+      await renderCurrentState("settings");
+      requireElement("settings-status").textContent = "Third-party API config saved.";
+      localizeDocument();
+    }).catch((error) => {
+      controls.apiStyle.disabled = false;
+      controls.baseUrl.disabled = false;
+      controls.apiKey.disabled = false;
+      controls.model.disabled = false;
+      controls.save.disabled = false;
+      status.textContent = "Couldn’t save third-party API config. Try again.";
+      localizeDocument();
+      renderCaughtError(error);
+    });
+  };
+}
+
 async function runAgentSetupButtonAction(id, handler, loadingText) {
   const button = requireButton(id);
   const previous = button.textContent || "Working…";
@@ -1992,6 +2034,11 @@ function renderSettings(state) {
   const walkSpeedValue = requireElement("pet-walk-speed-value");
   const windowsRenderModeSelect = requireSelect("windows-render-mode");
   const windowsRenderModeValue = requireElement("windows-render-mode-value");
+  const petHelpApiStyle = requireSelect("pet-help-api-style");
+  const petHelpBaseUrl = requireInput("pet-help-base-url");
+  const petHelpApiKey = requireInput("pet-help-api-key");
+  const petHelpModel = requireInput("pet-help-model");
+  const petHelpSave = requireButton("pet-help-third-party-save");
   const status = requireElement("settings-status");
 
   languageSelect.value = state.preferences.language;
@@ -1999,11 +2046,20 @@ function renderSettings(state) {
   scaleSelect.value = String(state.preferences.petScale);
   walkSpeedInput.value = String(state.preferences.petWalkSpeed);
   windowsRenderModeSelect.value = state.preferences.windowsRenderMode;
+  petHelpApiStyle.value = state.preferences.petHelpThirdPartyConfig.apiStyle;
+  petHelpBaseUrl.value = state.preferences.petHelpThirdPartyConfig.baseUrl;
+  petHelpApiKey.value = state.preferences.petHelpThirdPartyConfig.apiKey || "";
+  petHelpModel.value = state.preferences.petHelpThirdPartyConfig.model;
   languageSelect.disabled = false;
   openOnLaunch.disabled = false;
   scaleSelect.disabled = false;
   walkSpeedInput.disabled = false;
   windowsRenderModeSelect.disabled = false;
+  petHelpApiStyle.disabled = false;
+  petHelpBaseUrl.disabled = false;
+  petHelpApiKey.disabled = false;
+  petHelpModel.disabled = false;
+  petHelpSave.disabled = false;
   scale.textContent = `${scaleLabelFor(state.preferences.petScale)} (${state.preferences.petScale}x)`;
   walkSpeedValue.textContent = walkSpeedLabelFor(state.preferences.petWalkSpeed);
   windowsRenderModeValue.textContent = windowsRenderModeLabelFor(state.preferences.windowsRenderMode);
@@ -2014,6 +2070,7 @@ function renderSettings(state) {
   bindWalkSpeedSlider(walkSpeedInput, walkSpeedValue, state.preferences.petWalkSpeed);
   bindWindowsRenderModeSelect(windowsRenderModeSelect, state.preferences.windowsRenderMode);
   bindLaunchAtLogin(launchAtLogin, launchAtLoginDetail);
+  bindPetHelpThirdPartySettings({ apiStyle: petHelpApiStyle, baseUrl: petHelpBaseUrl, apiKey: petHelpApiKey, model: petHelpModel, save: petHelpSave }, state.preferences.petHelpThirdPartyConfig);
   bindUpdateControls();
   void renderPetMemorySettings().catch(renderCaughtError);
   void renderReactionAnimationSettings().catch(renderCaughtError);
@@ -2586,7 +2643,12 @@ function isStateSnapshot(value) {
     && typeof value.preferences.petScale === "number"
     && typeof value.preferences.petWalkSpeed === "number"
     && (value.preferences.windowsRenderMode === "low-power" || value.preferences.windowsRenderMode === "balanced" || value.preferences.windowsRenderMode === "full")
-    && typeof value.preferences.onboardingCompleted === "boolean";
+    && typeof value.preferences.onboardingCompleted === "boolean"
+    && (value.preferences.petHelpProviderMode === "claude" || value.preferences.petHelpProviderMode === "third-party")
+    && isRecord(value.preferences.petHelpThirdPartyConfig)
+    && (value.preferences.petHelpThirdPartyConfig.apiStyle === "openai" || value.preferences.petHelpThirdPartyConfig.apiStyle === "anthropic")
+    && typeof value.preferences.petHelpThirdPartyConfig.baseUrl === "string"
+    && typeof value.preferences.petHelpThirdPartyConfig.model === "string";
 }
 
 function isOnboardingSnapshot(value) {

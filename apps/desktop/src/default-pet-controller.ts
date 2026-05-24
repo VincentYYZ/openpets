@@ -13,7 +13,6 @@ import { clearTransientReaction, createDefaultPetWindow, getDefaultPetSpriteBoun
 import { openPetHelpWindow, setPetHelpWindowVisibilityChangedHandler, updatePetHelpWindowAnchor } from "./pet-help-window.js";
 import { openPetReminderWindow, setPetReminderWindowVisibilityChangedHandler, updatePetReminderWindowAnchor } from "./pet-reminder-window.js";
 import { getWindowsRenderMode } from "./render-mode.js";
-import { pickReactionMessage } from "./reaction-messages.js";
 
 let defaultPetWindow: BrowserWindow | null = null;
 let paused = false;
@@ -40,6 +39,7 @@ let defaultPetNativePosition: Point | null = null;
 let defaultPetPendingNativePosition: Point | null = null;
 let displayGeneration = 0;
 let petInteractive = false;
+let petContextMenuVisible = false;
 let lastAmbientSpeechAt = 0;
 const busyStatusBadgeMs = 120_000;
 const waitingStatusBadgeMs = 15_000;
@@ -118,10 +118,14 @@ export function getDefaultPetPaused(): boolean {
   return paused;
 }
 
-export function refreshDefaultPetContent(): void {
+export function refreshDefaultPetContent(rebuildReactionMessage = false): void {
   if (!defaultPetWindow || defaultPetWindow.isDestroyed()) {
     debug("pet.default", "refresh skipped", { reason: "no-window" });
     return;
+  }
+
+  if (rebuildReactionMessage) {
+    transientDisplay = rebuildReactionOnlyDisplay(transientDisplay);
   }
 
   currentAnimationState = resolveCurrentAnimationState();
@@ -174,6 +178,21 @@ export function finishPetHelpRequest(result: "success" | "error"): { readonly sh
   }
   setTransientDisplay({ reaction: result });
   showDefaultPetForExternalEvent();
+  return { shown: isDefaultPetVisible() };
+}
+
+export function cancelPetHelpRequest(): { readonly shown: boolean; readonly reason?: string } {
+  if (paused) {
+    return { shown: false, reason: "paused" };
+  }
+
+  petHelpRequestDepth = Math.max(0, petHelpRequestDepth - 1);
+  if (petHelpRequestDepth === 0) {
+    petHelpBusyReactionGuardUntil = Date.now() + petHelpBusyReactionGuardMs;
+    clearDefaultPetDisplayTimers();
+    refreshDefaultPetContent();
+    scheduleAmbientSpeech();
+  }
   return { shown: isDefaultPetVisible() };
 }
 
@@ -301,6 +320,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     },
     onMoved: handleDefaultPetMoved,
     onBubbleDismissed: handleBubbleDismissed,
+    onContextMenuVisibilityChanged: handlePetContextMenuVisibilityChanged,
   }, getCurrentDismissToken());
   const windowId = defaultPetWindow.id;
   info("pet.default", "created", { windowId, position, paused, petId: getAppStateSnapshot().preferences.defaultPetId });
@@ -311,6 +331,7 @@ function getOrCreateDefaultPetWindow(): BrowserWindow {
     clearAmbientSpeechTimer();
     clearFolderDragPreviewTimeout();
     clearPetInteractiveState();
+    petContextMenuVisible = false;
     defaultPetLogicalPosition = null;
     defaultPetNativePosition = null;
     defaultPetPendingNativePosition = null;
@@ -476,7 +497,7 @@ export function triggerPetReminderDisplay(text: string): void {
   if (!trimmed) return;
   const limited = trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 80)}…`;
   const message = `提醒：${limited}`;
-  setTransientDisplay({ message, reaction: "waving" });
+  setTransientDisplay({ message, passive: true });
   showDefaultPetForExternalEvent();
   info("pet.reminder", "reminder displayed", { message });
 }
@@ -622,6 +643,22 @@ function handlePetInteractiveChanged(interactive: boolean, source?: string): voi
   if (interactive) {
     stopDefaultPetAutoWalk();
     showAmbientSpeech(true);
+    return;
+  }
+
+  startDefaultPetAutoWalk();
+}
+
+function handlePetContextMenuVisibilityChanged(visible: boolean): void {
+  if (petContextMenuVisible === visible) {
+    return;
+  }
+
+  petContextMenuVisible = visible;
+  debug("pet.default", "context menu visibility changed", { visible, mode: behaviorState.mode });
+  if (visible) {
+    flushDefaultPetVisualOffset("context-menu-open");
+    stopDefaultPetAutoWalk();
     return;
   }
 
@@ -896,10 +933,19 @@ function showAmbientSpeech(immediate = false): void {
 
   lastAmbientSpeechAt = Date.now();
   setTransientDisplay({
-    reactionMessage: pickReactionMessage(reaction, getSelectedPetReactionMessageOverrides()),
+    reaction,
     passive: true,
   });
   scheduleAmbientSpeech(intervalMs);
+}
+
+function rebuildReactionOnlyDisplay(display: PetTransientDisplay | null): PetTransientDisplay | null {
+  if (!display || display.message || !display.reaction) return display;
+  if (!display.reactionMessage) return display;
+  return {
+    ...display,
+    reactionMessage: undefined,
+  };
 }
 
 function shouldAllowAmbientSpeech(): boolean {
@@ -1005,12 +1051,20 @@ function reclampDefaultPetWindow(): void {
 }
 
 function startDefaultPetAutoWalk(): void {
-  if (autoWalkTimer || paused || petInteractive || isAnyHelperWindowOpen() || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
+  if (autoWalkTimer || paused || petInteractive || petContextMenuVisible || isAnyHelperWindowOpen() || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
+    return;
+  }
+
+  scheduleNextDefaultPetAutoWalk();
+  scheduleAmbientSpeech();
+}
+
+function scheduleNextDefaultPetAutoWalk(): void {
+  if (autoWalkTimer || paused || petInteractive || petContextMenuVisible || isAnyHelperWindowOpen() || !defaultPetWindow || defaultPetWindow.isDestroyed() || !defaultPetWindow.isVisible()) {
     return;
   }
 
   autoWalkTimer = setTimeout(stepDefaultPetAutoWalk, getAutoWalkTickMs());
-  scheduleAmbientSpeech();
 }
 
 function stopDefaultPetAutoWalk(): void {
@@ -1036,7 +1090,7 @@ function stepDefaultPetAutoWalk(): void {
   }
 
   if (statusBadge || (transientDisplay && !transientDisplay.passive)) {
-    startDefaultPetAutoWalk();
+    scheduleNextDefaultPetAutoWalk();
     return;
   }
 
@@ -1050,7 +1104,7 @@ function stepDefaultPetAutoWalk(): void {
     maxX: workArea.x + workArea.width - defaultPetWindowSize.width - autoWalkEdgePaddingPx,
     speedPx: getAutoWalkSpeedPx(),
   });
-  startDefaultPetAutoWalk();
+  scheduleNextDefaultPetAutoWalk();
 }
 
 function getAutoWalkTickMs(): number {

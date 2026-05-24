@@ -84,11 +84,24 @@ export function closeAllAgentPets(): void {
 }
 
 export function refreshAgentPetContent(): void {
+  refreshAgentPetContentWithOptions();
+}
+
+export function refreshAgentPetSpeechContent(): void {
+  refreshAgentPetContentWithOptions(true);
+}
+
+function refreshAgentPetContentWithOptions(rebuildReactionMessage = false): void {
   debug("pet.agent", "refresh all content", { activeWindows: agentPetWindows.size, petIds: [...agentPetWindows.keys()] });
   const scale = getPreferredPetScale();
   for (const [petId, window] of agentPetWindows.entries()) {
     if (!window.isDestroyed()) {
-      const display = transientDisplays.get(petId) ?? null;
+      const currentDisplay = transientDisplays.get(petId) ?? null;
+      const display = rebuildReactionMessage ? rebuildReactionOnlyDisplay(currentDisplay) : currentDisplay;
+      if (rebuildReactionMessage) {
+        if (display) transientDisplays.set(petId, display);
+        else transientDisplays.delete(petId);
+      }
       const badge = statusBadges.get(petId) ?? null;
       void loadExplicitPetContent(window, petId, display, badge, getCurrentDismissToken(petId, display, badge), scale);
     }
@@ -214,6 +227,15 @@ function clearAllAgentDisplayTimers(): void {
   statusBadgeTimers.clear();
   transientDisplays.clear();
   statusBadges.clear();
+}
+
+function rebuildReactionOnlyDisplay(display: PetTransientDisplay | null): PetTransientDisplay | null {
+  if (!display || display.message || !display.reaction) return display;
+  if (!display.reactionMessage) return display;
+  return {
+    ...display,
+    reactionMessage: undefined,
+  };
 }
 
 function setStatusBadge(petId: string, reaction: OpenPetsReaction): void {

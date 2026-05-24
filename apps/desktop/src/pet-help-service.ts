@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { getAppStateSnapshot } from "./app-state.js";
 import { buildPetMemoryContext } from "./pet-memory-context.js";
+import { askPetHelpWithThirdParty } from "./pet-help-third-party-service.js";
 
 export interface PetHelpTurn {
   readonly role: "user" | "assistant";
@@ -16,30 +17,57 @@ export interface PetHelpAskRequest {
   readonly history: readonly PetHelpTurn[];
 }
 
+interface PetHelpStreamOptions {
+  readonly onChunk?: (chunk: string) => void;
+  readonly signal?: AbortSignal;
+}
+
 interface CommandResult {
   readonly ok: boolean;
+  readonly cancelled: boolean;
   readonly timedOut: boolean;
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  readonly parsedAnswer: string;
   readonly error?: string;
+}
+
+export class PetHelpCancelledError extends Error {
+  constructor() {
+    super("Claude Code 请求已取消。");
+    this.name = "PetHelpCancelledError";
+  }
 }
 
 const petHelpTimeoutMs = 120_000;
 const petHelpChatOnlyTimeoutMs = 45_000;
 const maxClaudeOutputBytes = 96_000;
 
-export async function askPetHelpWithClaude(request: PetHelpAskRequest): Promise<{ readonly answer: string }> {
+export async function askPetHelp(request: PetHelpAskRequest, options: PetHelpStreamOptions = {}): Promise<{ readonly answer: string }> {
+  const preferences = getAppStateSnapshot().preferences;
+  return preferences.petHelpProviderMode === "third-party"
+    ? askPetHelpWithThirdParty(request, preferences.petHelpThirdPartyConfig, options)
+    : askPetHelpWithClaude(request, options);
+}
+
+export async function askPetHelpWithClaude(request: PetHelpAskRequest, options: PetHelpStreamOptions = {}): Promise<{ readonly answer: string }> {
   const prompt = createClaudePetHelpPrompt(request);
   const command = getAppStateSnapshot().preferences.claudeCommandPath || "claude";
-  const chatOnly = shouldUseChatOnlyClaudeMode(request);
+  const chatOnly = true;
   let lastResult: CommandResult | null = null;
 
   for (const candidate of getClaudeCommandCandidates(command)) {
-    const result = await runClaudePrintCommand(candidate, prompt, chatOnly);
+    if (options.signal?.aborted) {
+      throw new PetHelpCancelledError();
+    }
+    const result = await runClaudePrintCommand(candidate, prompt, chatOnly, options.onChunk, options.signal);
     lastResult = result;
+    if (result.cancelled) {
+      throw new PetHelpCancelledError();
+    }
     if (result.ok) {
-      const answer = sanitizeClaudeOutput(result.stdout || result.stderr);
+      const answer = result.parsedAnswer || sanitizeClaudeOutput(result.stdout || result.stderr);
       return { answer: answer || "Claude Code 没有返回内容。" };
     }
     if (!isCommandNotFound(result)) break;
@@ -53,6 +81,8 @@ function createClaudePetHelpPrompt(request: PetHelpAskRequest): string {
   const memoryContext = buildPetMemoryContext().text;
   return [
     "你是用户桌面宠物背后的 Claude Code 助手。请用简洁、友好、可执行的中文回答。",
+    "当前窗口是一个轻量聊天气泡，你只能用文字回答，不能打开终端、执行命令、读写文件或调用任何工具。",
+    "不要让用户点击任何「Approve」、「允许」按钮，这个 UI 不提供它们。如果用户要求你打开终端、运行脚本、修改代码等需要实际执行的操作，请明确告诉他这里只能聊天，并用文字描述在终端或 Claude Code 主窗口里应该怎么做。",
     "如果问题与代码、终端、文件或项目有关，请优先给出具体步骤。",
     memoryContext ? `本地长期记忆：\n${memoryContext}` : "",
     history ? `最近对话：\n${history}` : "",
@@ -60,8 +90,12 @@ function createClaudePetHelpPrompt(request: PetHelpAskRequest): string {
   ].filter(Boolean).join("\n\n");
 }
 
-function runClaudePrintCommand(command: string, prompt: string, chatOnly: boolean): Promise<CommandResult> {
+function runClaudePrintCommand(command: string, prompt: string, chatOnly: boolean, onChunk?: (chunk: string) => void, signal?: AbortSignal): Promise<CommandResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ ok: false, cancelled: true, timedOut: false, exitCode: null, stdout: "", stderr: "", parsedAnswer: "", error: "Claude Code 请求已取消。" });
+      return;
+    }
     const commandLine = process.platform === "win32" && command.toLowerCase().endsWith(".cmd") ? "cmd.exe" : command;
     const claudeArgs = createClaudePrintArgs(prompt, chatOnly);
     const args = process.platform === "win32" && command.toLowerCase().endsWith(".cmd") ? ["/d", "/s", "/c", command, ...claudeArgs] : claudeArgs;
@@ -69,48 +103,139 @@ function runClaudePrintCommand(command: string, prompt: string, chatOnly: boolea
     try {
       child = spawn(commandLine, args, { cwd: app.getPath("home"), env: createCommandEnv(), windowsHide: true, shell: false });
     } catch (error) {
-      resolve({ ok: false, timedOut: false, exitCode: null, stdout: "", stderr: "", error: error instanceof Error ? error.message : "Claude Code 启动失败。" });
+      resolve({ ok: false, cancelled: false, timedOut: false, exitCode: null, stdout: "", stderr: "", parsedAnswer: "", error: error instanceof Error ? error.message : "Claude Code 启动失败。" });
       return;
     }
 
     let stdout = "";
     let stderr = "";
     let settled = false;
+    const streamParser = createClaudeStreamParser((delta) => {
+      const sanitized = sanitizeClaudeStreamChunk(delta);
+      if (sanitized) onChunk?.(sanitized);
+    });
+    const finish = (result: CommandResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
+      resolve(result);
+    };
+    const abortHandler = (): void => {
+      child.kill();
+      finish({ ok: false, cancelled: true, timedOut: false, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), parsedAnswer: streamParser.getAnswer(), error: "Claude Code 请求已取消。" });
+    };
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
       child.kill();
-      resolve({ ok: false, timedOut: true, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), error: "Claude Code 响应超时。" });
+      finish({ ok: false, cancelled: false, timedOut: true, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), parsedAnswer: streamParser.getAnswer(), error: "Claude Code 响应超时。" });
     }, chatOnly ? petHelpChatOnlyTimeoutMs : petHelpTimeoutMs);
+    signal?.addEventListener("abort", abortHandler, { once: true });
 
-    child.stdout?.on("data", (chunk: Buffer) => { stdout = appendBounded(stdout, chunk.toString("utf8")); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr = appendBounded(stderr, chunk.toString("utf8")); });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      stdout = appendBounded(stdout, text);
+      streamParser.push(text);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = appendBounded(stderr, chunk.toString("utf8"));
+    });
     child.on("error", (error: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: false, timedOut: false, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), error: error.message });
+      finish({ ok: false, cancelled: false, timedOut: false, exitCode: null, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), parsedAnswer: streamParser.getAnswer(), error: error.message });
     });
     child.on("close", (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: code === 0, timedOut: false, exitCode: code, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr) });
+      streamParser.flush();
+      finish({ ok: code === 0, cancelled: false, timedOut: false, exitCode: code, stdout: sanitizeClaudeOutput(stdout), stderr: sanitizeClaudeOutput(stderr), parsedAnswer: streamParser.getAnswer() });
     });
   });
 }
 
 function createClaudePrintArgs(prompt: string, chatOnly: boolean): readonly string[] {
-  const baseArgs = ["--output-format", "text", "--no-session-persistence", "-p", prompt];
+  const baseArgs = ["--output-format", "stream-json", "--verbose", "--no-session-persistence", "-p", prompt];
   return chatOnly ? ["--tools", "", ...baseArgs] : baseArgs;
 }
 
-function shouldUseChatOnlyClaudeMode(request: PetHelpAskRequest): boolean {
-  const text = `${request.message}\n${request.history.slice(-4).map((turn) => turn.content).join("\n")}`;
-  if (/(代码|项目|仓库|文件|终端|命令|报错|错误|bug|修复|实现|函数|类|接口|TypeScript|JavaScript|Electron|pnpm|npm|git|PowerShell|Windows|macOS|路径|目录|构建|打包|测试|日志|配置|API|JSON|IPC|MCP|Claude Code|OpenPets)/i.test(text)) {
-    return false;
+interface ClaudeStreamParser {
+  push(chunk: string): void;
+  flush(): void;
+  getAnswer(): string;
+}
+
+function createClaudeStreamParser(onDelta: (delta: string) => void): ClaudeStreamParser {
+  let buffer = "";
+  let assistantText = "";
+  let emittedText = "";
+  let resultText = "";
+
+  const emit = (next: string): void => {
+    if (!next || next.length <= emittedText.length) return;
+    const delta = next.slice(emittedText.length);
+    emittedText = next;
+    if (delta) onDelta(delta);
+  };
+
+  const handleLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    if (!event || typeof event !== "object") return;
+    const record = event as { type?: unknown; message?: unknown; result?: unknown };
+    if (record.type === "assistant" && record.message && typeof record.message === "object") {
+      const message = record.message as { content?: unknown };
+      const turnText = extractAssistantTurnText(message.content);
+      if (turnText) {
+        assistantText = assistantText ? `${assistantText}\n\n${turnText}` : turnText;
+        emit(assistantText);
+      }
+      return;
+    }
+    if (record.type === "result" && typeof record.result === "string" && record.result.trim()) {
+      resultText = record.result;
+      emit(resultText);
+    }
+  };
+
+  return {
+    push(chunk) {
+      buffer += chunk;
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        handleLine(line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    },
+    flush() {
+      if (!buffer) return;
+      const remaining = buffer;
+      buffer = "";
+      handleLine(remaining);
+    },
+    getAnswer() {
+      return (assistantText || resultText).trim();
+    },
+  };
+}
+
+function extractAssistantTurnText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type === "text" && typeof typed.text === "string") {
+      parts.push(typed.text);
+    }
   }
-  return true;
+  return parts.join("");
 }
 
 function getClaudeCommandCandidates(command: string): readonly string[] {
@@ -171,16 +296,26 @@ function appendBounded(existing: string, next: string): string {
   return combined.length > maxClaudeOutputBytes ? combined.slice(combined.length - maxClaudeOutputBytes) : combined;
 }
 
+function sanitizeClaudeStreamChunk(value: string): string {
+  return stripAnsi(value);
+}
+
 function sanitizeClaudeOutput(value: string): string {
-  return value.replace(/\u001b\[[0-9;]*m/g, "").trim();
+  return stripAnsi(value).trim();
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 function isCommandNotFound(result: CommandResult): boolean {
+  if (result.cancelled) return false;
   return Boolean(result.error && /ENOENT|not found/i.test(result.error));
 }
 
 function summarizeClaudeFailure(result: CommandResult | null): string {
   if (!result) return "Claude Code 启动失败。";
+  if (result.cancelled) return "Claude Code 请求已取消。";
   if (result.timedOut) return "Claude Code 响应超时，请稍后再试。";
   const output = result.stderr || result.stdout || result.error || `Claude Code 退出码：${result.exitCode ?? "unknown"}`;
   return sanitizeClaudeOutput(output) || "Claude Code 请求失败。";

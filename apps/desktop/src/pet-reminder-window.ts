@@ -205,43 +205,50 @@ function createPetReminderHtml(): string {
       :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; color: #4a2b14; }
-      body { padding: 10px; }
-      .shell { width: 100%; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid rgba(212, 153, 91, 0.46); border-radius: 22px; background: radial-gradient(circle at 82% 8%, rgba(254, 215, 170, 0.72), transparent 26%), linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,247,237,0.94)); box-shadow: 0 24px 70px rgba(120, 53, 15, 0.18), inset 0 1px 0 rgba(255,255,255,0.9); }
-      header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 16px 12px 18px; -webkit-app-region: drag; }
-      .eyebrow { margin: 0 0 3px; color: #d97706; font-size: 11px; font-weight: 900; letter-spacing: 0.08em; }
-      h1 { margin: 0; font-size: 18px; line-height: 1.15; letter-spacing: -0.02em; }
+      body { padding: 12px; background: linear-gradient(180deg, rgba(255, 244, 232, 0.62), rgba(255, 250, 244, 0.26)); }
+      .shell { width: 100%; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid rgba(212, 153, 91, 0.34); border-radius: 26px; background: radial-gradient(circle at 82% 6%, rgba(254, 215, 170, 0.78), transparent 28%), linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,248,240,0.95)); box-shadow: 0 26px 72px rgba(120, 53, 15, 0.16), inset 0 1px 0 rgba(255,255,255,0.94); backdrop-filter: blur(12px); }
+      header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 18px 18px 14px 18px; -webkit-app-region: drag; }
+      .header-main { min-width: 0; display: grid; gap: 8px; }
+      .eyebrow { margin: 0; color: #d97706; font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+      h1 { margin: 0; font-size: 24px; line-height: 1.08; letter-spacing: -0.03em; }
+      .header-note { margin: 0; padding: 10px 12px; border-radius: 16px; background: rgba(255,255,255,0.7); border: 1px solid rgba(253, 186, 116, 0.34); color: #9a5c17; font-size: 12px; line-height: 1.45; font-weight: 800; box-shadow: inset 0 1px 0 rgba(255,255,255,0.92); }
       button { border: 0; font: inherit; cursor: pointer; -webkit-app-region: no-drag; }
-      .close { width: 34px; height: 34px; border-radius: 12px; background: rgba(255,255,255,0.78); color: #8a5a2b; font-weight: 950; box-shadow: inset 0 1px 0 rgba(255,255,255,0.92), 0 8px 18px rgba(170,98,30,0.08); }
+      .close { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border-radius: 14px; background: rgba(255,255,255,0.82); color: #8a5a2b; font-size: 24px; line-height: 1; font-weight: 700; box-shadow: inset 0 1px 0 rgba(255,255,255,0.92), 0 8px 18px rgba(170,98,30,0.08); }
       .close:hover { color: #dc2626; background: #fff; }
-      form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 8px 16px 12px; border-top: 1px solid rgba(212, 153, 91, 0.22); background: rgba(255,247,237,0.6); }
-      textarea, input[type="datetime-local"] { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(212, 153, 91, 0.48); outline: none; background: rgba(255,255,255,0.94); color: #4a2b14; font: 700 13px/1.42 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: inset 0 1px 2px rgba(180,140,100,0.14); }
-      textarea { max-height: 96px; min-height: 56px; resize: none; }
+      form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0 14px 12px; padding: 14px; border-radius: 20px; border: 1px solid rgba(253, 186, 116, 0.36); background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,248,240,0.74)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.9); }
+      textarea, input[type="datetime-local"] { width: 100%; padding: 12px 13px; border-radius: 16px; border: 1px solid rgba(212, 153, 91, 0.34); outline: none; background: rgba(255,255,255,0.96); color: #4a2b14; font: 700 14px/1.46 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: inset 0 1px 2px rgba(180,140,100,0.10), 0 8px 18px rgba(170,98,30,0.05); }
+      textarea { max-height: 104px; min-height: 62px; resize: none; }
       textarea:focus, input[type="datetime-local"]:focus { border-color: rgba(217,119,6,0.72); box-shadow: 0 0 0 3px rgba(217,119,6,0.12), inset 0 1px 2px rgba(180,140,100,0.14); }
-      .quick { display: flex; flex-wrap: wrap; gap: 6px; }
-      .quick button { padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.78); color: #b45309; font-size: 12px; font-weight: 800; box-shadow: inset 0 1px 0 rgba(255,255,255,0.92), 0 6px 14px rgba(170,98,30,0.08); }
+      .quick { display: flex; flex-wrap: wrap; gap: 8px; }
+      .quick button { min-height: 34px; padding: 0 12px; border-radius: 999px; background: rgba(255,255,255,0.86); color: #b45309; font-size: 12px; font-weight: 850; white-space: nowrap; box-shadow: inset 0 1px 0 rgba(255,255,255,0.92), 0 6px 14px rgba(170,98,30,0.08); }
       .quick button:hover { background: #fff; }
-      .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
-      .add { min-width: 72px; height: 40px; padding: 0 14px; border-radius: 12px; background: linear-gradient(180deg, #f59e0b, #d97706); color: white; font-weight: 950; box-shadow: 0 10px 22px rgba(217,119,6,0.22), inset 0 1px 0 rgba(255,255,255,0.42); }
+      .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+      .add { min-width: 88px; height: 48px; padding: 0 18px; border-radius: 16px; background: linear-gradient(180deg, #f59e0b, #d97706); color: white; font-size: 14px; font-weight: 950; white-space: nowrap; box-shadow: 0 12px 24px rgba(217,119,6,0.22), inset 0 1px 0 rgba(255,255,255,0.42); }
       .add:disabled { background: #fde68a; color: #92400e; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9); cursor: default; }
-      .list { min-height: 0; overflow: auto; padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
-      .item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,0.85); border: 1px solid rgba(212, 153, 91, 0.30); box-shadow: 0 8px 18px rgba(170,98,30,0.08); }
-      .item .text { font-size: 13px; line-height: 1.42; color: #3f2412; word-break: break-word; white-space: pre-wrap; }
-      .item .when { margin-top: 4px; font-size: 11px; color: #92400e; font-weight: 800; letter-spacing: 0.02em; }
-      .item .delete { width: 30px; height: 30px; align-self: start; border-radius: 10px; background: rgba(255,255,255,0.6); color: #b45309; font-size: 14px; font-weight: 900; }
+      .list { min-height: 0; overflow: auto; margin: 0 14px 12px; padding: 2px; display: flex; flex-direction: column; gap: 10px; }
+      .item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 14px; border-radius: 18px; background: rgba(255,255,255,0.9); border: 1px solid rgba(253, 186, 116, 0.28); box-shadow: 0 10px 20px rgba(170,98,30,0.07); }
+      .item .text { font-size: 14px; line-height: 1.5; color: #3f2412; word-break: break-word; white-space: pre-wrap; }
+      .item .when { margin-top: 6px; font-size: 11px; color: #92400e; font-weight: 850; letter-spacing: 0.02em; }
+      .item .delete { width: 34px; height: 34px; align-self: start; border-radius: 12px; background: rgba(255,247,237,0.94); color: #b45309; font-size: 18px; line-height: 1; font-weight: 900; }
       .item .delete:hover { color: #dc2626; background: #fff; }
-      .empty { padding: 14px; text-align: center; color: #92400e; font-size: 12px; font-weight: 800; opacity: 0.9; }
-      .status { min-height: 22px; margin: 0; padding: 0 16px 12px; color: #92400e; font-size: 12px; font-weight: 750; }
+      .empty { padding: 18px 16px; text-align: center; color: #92400e; font-size: 12px; font-weight: 800; opacity: 0.9; border-radius: 16px; background: rgba(255,255,255,0.56); border: 1px dashed rgba(217,119,6,0.22); }
+      .status { min-height: 22px; margin: 0 14px 14px; padding: 0 4px; color: #92400e; font-size: 12px; line-height: 1.4; font-weight: 800; }
       .status.error { color: #b91c1c; }
+      @media (max-width: 430px) {
+        .row { grid-template-columns: minmax(0, 1fr); }
+        .add { width: 100%; }
+      }
     </style>
   </head>
   <body>
     <main class="shell">
       <header>
-        <div>
+        <div class="header-main">
           <p class="eyebrow">REMINDER</p>
           <h1>宠物提醒你</h1>
+          <p class="header-note">到时间时，宠物会从桌面右下角蹦出来提醒你，不用担心错过待办。</p>
         </div>
-        <button class="close" type="button" data-close aria-label="关闭">关闭</button>
+        <button class="close" type="button" data-close aria-label="关闭">×</button>
       </header>
       <form data-form>
         <textarea data-input maxlength="200" rows="2" placeholder="要提醒你什么呢？例如：1 点开会"></textarea>

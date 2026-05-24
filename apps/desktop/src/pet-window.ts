@@ -32,6 +32,7 @@ export interface DefaultPetWindowOptions {
   readonly onFolderDragLeft?: () => void;
   readonly onFolderDropped?: (paths: readonly string[]) => void;
   readonly onBubbleDismissed?: (dismissToken: string) => void;
+  readonly onContextMenuVisibilityChanged?: (visible: boolean) => void;
 }
 
 export interface AgentPetWindowOptions {
@@ -85,7 +86,7 @@ export function createDefaultPetWindow(options: DefaultPetWindowOptions, dismiss
     { label: "宠物提醒你", click: () => options.onReminderRequested?.(window.getBounds()) },
     { type: "separator" },
     { label: "Hide pet", click: options.onHideRequested },
-  ]);
+  ], options.onContextMenuVisibilityChanged);
 
   const savePosition = debounce(() => {
     if (window.isDestroyed()) {
@@ -128,15 +129,23 @@ export function createAgentPetWindow(options: AgentPetWindowOptions, dismissToke
   return window;
 }
 
-function installPetContextMenu(window: BrowserWindow, template: readonly MenuItemConstructorOptions[]): void {
+function installPetContextMenu(window: BrowserWindow, template: readonly MenuItemConstructorOptions[], onVisibilityChanged?: (visible: boolean) => void): void {
   const webContents = window.webContents;
+  let menuVisible = false;
+  const setMenuVisible = (visible: boolean): void => {
+    if (menuVisible === visible) return;
+    menuVisible = visible;
+    onVisibilityChanged?.(visible);
+  };
   const handleContextMenu = (event: Electron.Event): void => {
     event.preventDefault();
     if (window.isDestroyed()) return;
-    Menu.buildFromTemplate([...template]).popup({ window });
+    setMenuVisible(true);
+    Menu.buildFromTemplate([...template]).popup({ window, callback: () => setMenuVisible(false) });
   };
   webContents.on("context-menu", handleContextMenu);
   window.once("closed", () => {
+    setMenuVisible(false);
     if (!webContents.isDestroyed()) webContents.off("context-menu", handleContextMenu);
   });
 }

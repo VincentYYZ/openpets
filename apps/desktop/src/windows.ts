@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, protocol, type IpcMainInvokeEvent } from "electron";
 
 import { getAgentSetupSnapshot, runAgentSetupAction, updateAgentSetupCommandPaths } from "./agent-setup.js";
-import { refreshAgentPetContent } from "./agent-pet-controller.js";
-import { completeOnboarding, getAppStateSnapshot, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, normalizeWindowsRenderMode, petScaleOptions, petWalkSpeedStep, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings, type WindowsRenderMode } from "./app-state.js";
+import { refreshAgentPetContent, refreshAgentPetSpeechContent } from "./agent-pet-controller.js";
+import { completeOnboarding, getAppStateSnapshot, maxPetWalkSpeed, minPetWalkSpeed, normalizePetScale, normalizePetWalkSpeed, normalizeWindowsRenderMode, petScaleOptions, petWalkSpeedStep, updateInstalledPetSpeechConfig, updatePreferences, validatePetAmbientSpeechSettings, type PetHelpApiStyle, type WindowsRenderMode } from "./app-state.js";
 import { getCatalogPageUiState, getCatalogSearchUiState, getCatalogUiState } from "./catalog.js";
 import { getCodexPetsUiState, importCodexPet, readCodexPetSpritesheet } from "./codex-pets.js";
 import { refreshDefaultPetContent, refreshDefaultPetRuntimePreferences, resetDefaultPetToInitialPosition } from "./default-pet-controller.js";
@@ -229,8 +229,8 @@ export function installInternalUiHandlers(): void {
       reactionMessageOverrides: validateReactionMessageOverrides(overrides),
       ambientSpeechSettings: validatePetAmbientSpeechSettings(ambientSpeechSettings),
     });
-    refreshDefaultPetContent();
-    refreshAgentPetContent();
+    refreshDefaultPetContent(true);
+    refreshAgentPetSpeechContent();
     return state;
   });
 
@@ -968,6 +968,47 @@ function createSettingsHtml(definition: TaskWindowDefinition, language: AppLangu
               <div id="pet-memory-list" class="memory-list" aria-live="polite"></div>
             </div>
           </section>
+          <section class="settings-panel" aria-labelledby="settings-pet-help-title">
+            <div class="settings-section-heading">
+              <span>
+                <small>Pet Help</small>
+                <h2 id="settings-pet-help-title">Third-party model API</h2>
+              </span>
+              <button id="pet-help-third-party-save">Save API config</button>
+            </div>
+            <p class="settings-helper">When Claude Code is turned off in the pet help window, replies will use this third-party model configuration instead.</p>
+            <label class="setting-row">
+              <span>
+                <strong>API style</strong>
+                <small>Choose an OpenAI-compatible or Anthropic-compatible endpoint format.</small>
+              </span>
+              <select id="pet-help-api-style" class="settings-select" aria-label="Pet help API style">
+                <option value="openai">OpenAI-compatible</option>
+                <option value="anthropic">Anthropic-compatible</option>
+              </select>
+            </label>
+            <label class="setting-row setting-row-stack">
+              <span>
+                <strong>Base URL</strong>
+                <small>DeepSeek examples: https://api.deepseek.com or https://api.deepseek.com/anthropic</small>
+              </span>
+              <input id="pet-help-base-url" class="settings-input" type="text" spellcheck="false" placeholder="https://api.deepseek.com" />
+            </label>
+            <label class="setting-row setting-row-stack">
+              <span>
+                <strong>API Key</strong>
+                <small>Apply for an API key from your third-party model provider.</small>
+              </span>
+              <input id="pet-help-api-key" class="settings-input" type="password" spellcheck="false" placeholder="sk-..." />
+            </label>
+            <label class="setting-row setting-row-stack">
+              <span>
+                <strong>Model</strong>
+                <small>Examples: deepseek-v4-flash or deepseek-v4-pro</small>
+              </span>
+              <input id="pet-help-model" class="settings-input" type="text" spellcheck="false" placeholder="deepseek-v4-flash" />
+            </label>
+          </section>
           <section class="settings-panel reaction-settings-panel" aria-labelledby="settings-reaction-animations-title">
             <div class="settings-section-heading">
               <span>
@@ -1089,6 +1130,8 @@ function createTaskWindowStyles(): string {
     body[data-openpets-view="settings"] .memory-item strong { margin: 0 0 3px; color: #176df2; font-size: 11px; text-transform: uppercase; }
     body[data-openpets-view="settings"] .memory-item p { margin: 0; color: #17284f; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
     body[data-openpets-view="settings"] .settings-select { min-height: 40px; min-width: 128px; box-sizing: border-box; border: 1px solid rgba(37, 99, 235, 0.34); border-radius: 11px; background: rgba(255,255,255,0.82); color: #17284f; padding: 0 12px; font: inherit; font-weight: 850; outline: none; }
+    body[data-openpets-view="settings"] .settings-input { width: 100%; min-height: 42px; box-sizing: border-box; border: 1px solid rgba(37, 99, 235, 0.24); border-radius: 11px; background: rgba(255,255,255,0.88); color: #17284f; padding: 0 12px; font: inherit; outline: none; }
+    body[data-openpets-view="settings"] .settings-input:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.18); outline-offset: 1px; }
     body[data-openpets-view="settings"] .settings-actions-inline { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
     body[data-openpets-view="settings"] input[type="checkbox"]:focus-visible, body[data-openpets-view="settings"] button:focus-visible, body[data-openpets-view="settings"] .settings-select:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.34); outline-offset: 3px; }
     body[data-openpets-view="settings"] button { min-height: 40px; border: 1px solid rgba(37, 99, 235, 0.34); border-radius: 11px; padding: 0 13px; background: rgba(255,255,255,0.76); color: #176df2; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 950; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 8px 18px rgba(61, 99, 160, 0.08); }
@@ -1441,12 +1484,12 @@ async function getDefaultPetPreviewSpriteInfo(): Promise<{ readonly path: string
   return { path: builtInPath, version: `builtin-${Math.round(fallback.mtimeMs)}-${fallback.size}` };
 }
 
-function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } {
+function validatePreferencePatch(value: unknown): { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides>; petHelpProviderMode?: "claude" | "third-party"; petHelpThirdPartyConfig?: { apiStyle: PetHelpApiStyle; baseUrl: string; apiKey?: string; model: string } } {
   if (!isRecord(value)) {
     throw new Error("Invalid preferences patch.");
   }
 
-  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides> } = {};
+  const patch: { language?: AppLanguage; openDefaultPetOnLaunch?: boolean; petScale?: number; petWalkSpeed?: number; windowsRenderMode?: WindowsRenderMode; reactionAnimationOverrides?: ReturnType<typeof validateReactionAnimationOverrides>; petHelpProviderMode?: "claude" | "third-party"; petHelpThirdPartyConfig?: { apiStyle: PetHelpApiStyle; baseUrl: string; apiKey?: string; model: string } } = {};
 
   if ("language" in value) {
     const language = normalizeAppLanguage(value.language);
@@ -1481,7 +1524,54 @@ function validatePreferencePatch(value: unknown): { language?: AppLanguage; open
     patch.reactionAnimationOverrides = validateReactionAnimationOverrides(value.reactionAnimationOverrides);
   }
 
+  if ("petHelpProviderMode" in value) {
+    if (value.petHelpProviderMode !== "claude" && value.petHelpProviderMode !== "third-party") throw new Error("Invalid pet help provider mode.");
+    patch.petHelpProviderMode = value.petHelpProviderMode;
+  }
+
+  if ("petHelpThirdPartyConfig" in value) {
+    patch.petHelpThirdPartyConfig = validatePetHelpThirdPartyConfig(value.petHelpThirdPartyConfig);
+  }
+
   return patch;
+}
+
+function validatePetHelpThirdPartyConfig(value: unknown): { apiStyle: PetHelpApiStyle; baseUrl: string; apiKey?: string; model: string } {
+  if (!isRecord(value)) throw new Error("Invalid third-party model configuration.");
+  const apiStyle = value.apiStyle === "anthropic" ? "anthropic" : value.apiStyle === "openai" ? "openai" : null;
+  if (!apiStyle) throw new Error("Invalid third-party API style.");
+  const baseUrl = validatePetHelpBaseUrl(value.baseUrl);
+  const model = validatePetHelpText(value.model, 200, "Invalid third-party model name.");
+  const apiKey = normalizeOptionalPetHelpText(value.apiKey, 4096, "Invalid third-party API key.");
+  return { apiStyle, baseUrl, apiKey, model };
+}
+
+function validatePetHelpBaseUrl(value: unknown): string {
+  const text = validatePetHelpText(value, 2048, "Invalid third-party base URL.");
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error("Invalid third-party base URL.");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Invalid third-party base URL.");
+  return url.toString().replace(/\/$/, "");
+}
+
+function validatePetHelpText(value: unknown, maxLength: number, errorMessage: string): string {
+  if (typeof value !== "string") throw new Error(errorMessage);
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength || /[\r\n\0]/.test(trimmed)) throw new Error(errorMessage);
+  return trimmed;
+}
+
+function normalizeOptionalPetHelpText(value: unknown, maxLength: number, errorMessage: string): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") throw new Error(errorMessage);
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > maxLength || /[\r\n\0]/.test(trimmed)) throw new Error(errorMessage);
+  return trimmed;
 }
 
 function getLaunchAtLoginState(): { supported: boolean; enabled: boolean } {

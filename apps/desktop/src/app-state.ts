@@ -16,6 +16,17 @@ export interface PetAmbientSpeechSettings {
   readonly hoveredIntervalMs?: number;
 }
 
+export type PetHelpProviderMode = "claude" | "third-party";
+
+export type PetHelpApiStyle = "openai" | "anthropic";
+
+export interface PetHelpThirdPartyConfig {
+  readonly apiStyle: PetHelpApiStyle;
+  readonly baseUrl: string;
+  readonly apiKey?: string;
+  readonly model: string;
+}
+
 export const minAmbientSpeechIntervalMs = 1_000;
 export const maxAmbientSpeechIntervalMs = 60_000;
 export const defaultMovingAmbientSpeechIntervalMs = 6_500;
@@ -58,6 +69,8 @@ export interface OpenPetsStateV1 {
     readonly claudeCommandPath?: string;
     readonly nodeCommandPath?: string;
     readonly opencodeCommandPath?: string;
+    readonly petHelpProviderMode: PetHelpProviderMode;
+    readonly petHelpThirdPartyConfig: PetHelpThirdPartyConfig;
   };
   readonly pets: {
     readonly installed: readonly InstalledPetState[];
@@ -345,6 +358,8 @@ function normalizePreferences(value: Partial<OpenPetsStateV1["preferences"]>): O
     claudeCommandPath: normalizeCommandPath(value.claudeCommandPath),
     nodeCommandPath: normalizeCommandPath(value.nodeCommandPath),
     opencodeCommandPath: normalizeCommandPath(value.opencodeCommandPath),
+    petHelpProviderMode: normalizePetHelpProviderMode(value.petHelpProviderMode),
+    petHelpThirdPartyConfig: normalizePetHelpThirdPartyConfig(value.petHelpThirdPartyConfig),
   };
 }
 
@@ -358,6 +373,49 @@ function normalizeCommandPath(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+  return trimmed;
+}
+
+function normalizePetHelpProviderMode(value: unknown): PetHelpProviderMode {
+  return value === "third-party" ? "third-party" : "claude";
+}
+
+function normalizePetHelpThirdPartyConfig(value: unknown): PetHelpThirdPartyConfig {
+  const record = isRecord(value) ? value : {};
+  const apiStyle = record.apiStyle === "anthropic" ? "anthropic" : "openai";
+  return {
+    apiStyle,
+    baseUrl: normalizePetHelpBaseUrl(record.baseUrl, apiStyle),
+    apiKey: normalizePetHelpApiKey(record.apiKey),
+    model: normalizePetHelpModel(record.model),
+  };
+}
+
+function normalizePetHelpBaseUrl(value: unknown, apiStyle: PetHelpApiStyle): string {
+  const fallback = apiStyle === "anthropic" ? "https://api.deepseek.com/anthropic" : "https://api.deepseek.com";
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2048 || /[\r\n\0]/.test(trimmed)) return fallback;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return fallback;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePetHelpApiKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 4096 || /[\r\n\0]/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function normalizePetHelpModel(value: unknown): string {
+  if (typeof value !== "string") return "deepseek-v4-flash";
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 200 || /[\r\n\0]/.test(trimmed)) return "deepseek-v4-flash";
   return trimmed;
 }
 
@@ -432,6 +490,13 @@ function createDefaultState(): OpenPetsStateV1 {
       claudeCommandPath: undefined,
       nodeCommandPath: undefined,
       opencodeCommandPath: undefined,
+      petHelpProviderMode: "claude",
+      petHelpThirdPartyConfig: {
+        apiStyle: "openai",
+        baseUrl: "https://api.deepseek.com",
+        apiKey: undefined,
+        model: "deepseek-v4-flash",
+      },
     },
     pets: {
       installed: [builtInPet],
